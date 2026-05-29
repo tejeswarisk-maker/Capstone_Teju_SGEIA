@@ -220,19 +220,42 @@ Keep responses under 250 words unless more detail is requested."""
         )
         return response.content.strip()
 
+    async def _call_groq() -> str:
+        """Groq free tier — llama-3.1-8b-instant, ~1s response."""
+        groq_key = settings.groq_api_key
+        if not groq_key:
+            raise RuntimeError("Groq key not configured")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                json={
+                    "model": "llama-3.1-8b-instant",
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user",   "content": request.query},
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 400,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"].strip()
+
     answer = ""
-    try:
-        answer = await _call_direct()
-    except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.ConnectError) as e:
-        logger.warning(f"[{request_id}] Direct call failed ({type(e).__name__}), trying LangChain fallback")
+    for attempt_name, attempt_fn in [
+        ("prodapt_gateway", _call_direct),
+        ("groq",            _call_groq),
+        ("langchain",       _call_langchain_fallback),
+    ]:
         try:
-            answer = await _call_langchain_fallback()
-        except Exception as e2:
-            logger.error(f"[{request_id}] Fallback also failed: {e2}")
-            answer = "Both LLM paths are unavailable right now. Please try again in a moment."
-    except Exception as e:
-        logger.error(f"[{request_id}] Fast chat error: {e}")
-        answer = f"I encountered an error processing your request: {str(e)}"
+            answer = await attempt_fn()
+            logger.info(f"[{request_id}] Fast chat answered via {attempt_name}")
+            break
+        except Exception as e:
+            logger.warning(f"[{request_id}] {attempt_name} failed: {type(e).__name__}: {e}")
+    if not answer:
+        answer = "All LLM providers are currently unavailable. Please check your API keys or try again shortly."
 
     elapsed_ms = int(time.time() * 1000) - start_ms
     logger.info(f"[{request_id}] Fast chat done in {elapsed_ms}ms")
