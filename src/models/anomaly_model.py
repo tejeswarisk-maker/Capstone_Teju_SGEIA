@@ -131,6 +131,29 @@ class AnomalyModel:
             "anomaly_score": round(score, 4),
         }
 
+    def predict_batch_ds2(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Batch anomaly detection on DS2 smart meter data.
+        Returns df with added 'anomaly_score' and 'is_anomaly' columns.
+        """
+        self._ensure_loaded()
+        if self._model_ds2 is None or self._scaler_ds2 is None:
+            df = df.copy()
+            df["anomaly_score"] = 0.0
+            df["is_anomaly"] = False
+            return df
+
+        available = [c for c in DS2_FEATURES if c in df.columns]
+        X = df[available].fillna(0.0)
+        X_scaled = self._scaler_ds2.transform(X)
+        scores = self._model_ds2.decision_function(X_scaled)
+        labels = self._model_ds2.predict(X_scaled)
+
+        df = df.copy()
+        df["anomaly_score"] = scores
+        df["is_anomaly"] = labels == -1
+        return df
+
     def predict_ds2(self, features: Dict) -> Dict:
         """
         Predict if a smart meter reading is anomalous (DS2 feature space).

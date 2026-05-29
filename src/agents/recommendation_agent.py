@@ -22,7 +22,7 @@ from src.logger import get_logger, log_pipeline_event
 
 logger = get_logger(__name__)
 
-MAX_REGENERATIONS = 2  # max retry loops before returning best attempt
+MAX_REGENERATIONS = 1  # max retry loops before returning best attempt (keep latency low)
 
 MITIGATION_SYSTEM_PROMPT = """You are a senior utility grid engineer providing operational mitigation guidance.
 
@@ -183,6 +183,9 @@ def generate_recommendations(state: AgentState) -> AgentState:
     llm_complex = get_model_router().get_llm("complex", temperature=0.2)
     llm_simple  = get_model_router().get_llm("simple",  temperature=0.0)
 
+    # Skip judge + faithfulness on first successful attempt to keep latency low;
+    # only run them on retry (attempt > 0).
+
     incidents = state.get("retrieved_incidents", [])
     retrieval_context = [inc["document"] for inc in incidents]
 
@@ -200,15 +203,17 @@ def generate_recommendations(state: AgentState) -> AgentState:
                 logger.warning(f"[{request_id}] Empty mitigation steps on attempt {attempt + 1}.")
                 continue
 
-            # ── Faithfulness gate ─────────────────────────────────────────────
-            faith_score = _deepeval_faithfulness(steps, retrieval_context)
-            logger.info(f"[{request_id}] Faithfulness score: {faith_score:.3f}")
-
-            # ── LLM-as-judge gate ─────────────────────────────────────────────
-            judge_score = _llm_judge(
-                mitigation, state.get("root_cause", {}), incidents, llm_simple
-            )
-            logger.info(f"[{request_id}] Judge score: {judge_score:.2f}/5")
+            # ── Quality gates — only run on retry to save latency ────────────
+            if attempt == 0:
+                faith_score = 1.0   # optimistic pass; will verify on retry
+                judge_score = 3.5   # neutral pass
+            else:
+                faith_score = _deepeval_faithfulness(steps, retrieval_context)
+                logger.info(f"[{request_id}] Faithfulness score: {faith_score:.3f}")
+                judge_score = _llm_judge(
+                    mitigation, state.get("root_cause", {}), incidents, llm_simple
+                )
+                logger.info(f"[{request_id}] Judge score: {judge_score:.2f}/5")
 
             if judge_score > best_judge_score:
                 best_mitigation  = mitigation

@@ -35,12 +35,10 @@ def _load_ds2_sample() -> pd.DataFrame:
     if not DS2_AUGMENTED.exists():
         return pd.DataFrame()
     try:
-        df = pd.read_csv(
-            DS2_AUGMENTED,
-            usecols=[c for c in DS2_ANALYSIS_COLS
-                     if c in pd.read_csv(DS2_AUGMENTED, nrows=0).columns],
-            nrows=DS2_SAMPLE_ROWS,
-        )
+        # Read header first cheaply, then load only matching columns
+        header = pd.read_csv(DS2_AUGMENTED, nrows=0).columns.tolist()
+        usecols = [c for c in DS2_ANALYSIS_COLS if c in header]
+        df = pd.read_csv(DS2_AUGMENTED, usecols=usecols, nrows=DS2_SAMPLE_ROWS)
         return df
     except Exception as e:
         logger.error(f"Failed to load DS2: {e}")
@@ -98,19 +96,13 @@ def analyse_smart_meter(state: AgentState) -> AgentState:
             "demand_forecast":     {},
         }
 
-    # ── Anomaly detection ─────────────────────────────────────────────────────
+    # ── Anomaly detection (batch — much faster than row-by-row) ──────────────
     anomaly_model = get_anomaly_model()
     anomaly_count = 0
     try:
-        # Sample 1000 rows for anomaly detection (fast)
         sample = df.sample(n=min(1000, len(df)), random_state=42)
-        feature_cols = ["power_consumption", "voltage", "current",
-                        "reactive_power", "demand_load"]
-        available = [c for c in feature_cols if c in sample.columns]
-        for _, row in sample[available].iterrows():
-            result = anomaly_model.predict_ds2(row.to_dict())
-            if result["is_anomaly"]:
-                anomaly_count += 1
+        result_df = anomaly_model.predict_batch_ds2(sample)
+        anomaly_count = int(result_df["is_anomaly"].sum())
     except Exception as e:
         logger.warning(f"[{request_id}] DS2 anomaly detection error: {e}")
 
