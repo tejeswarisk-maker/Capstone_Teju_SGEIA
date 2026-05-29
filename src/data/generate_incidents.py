@@ -269,7 +269,10 @@ def run_generation(force: bool = False, use_llm: bool = True) -> pd.DataFrame:
     if use_llm and settings.openai_api_key:
         try:
             from openai import OpenAI
-            client = OpenAI(api_key=settings.openai_api_key)
+            client = OpenAI(
+                api_key=settings.openai_api_key,
+                base_url=settings.openai_base_url,
+            )
             logger.info("OpenAI client initialised for description generation.")
         except ImportError:
             logger.warning("openai package not available — falling back to templates.")

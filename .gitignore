@@ -2,11 +2,11 @@
 .env
 
 # ── Large data files (too big for GitHub) ─────────────────────────────────────
-data/source_files/household_power_consumption.txt
-data/source_files/*.txt
-data/source_files/*.zip
-data/household_power_consumption_augmented.csv
-data/smart_grid_stability_augmented.csv
+data/source_files/
+data/originals/
+data/*.csv
+data/*.txt
+data/*.zip
 
 # ── Generated outputs (regenerate via setup_pipeline.py) ─────────────────────
 chroma_db/
