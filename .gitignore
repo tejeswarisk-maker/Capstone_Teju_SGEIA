@@ -1,0 +1,28 @@
+# ── Environment & Secrets ─────────────────────────────────────────────────────
+.env
+
+# ── Large data files (too big for GitHub) ─────────────────────────────────────
+data/source_files/household_power_consumption.txt
+data/source_files/*.txt
+data/source_files/*.zip
+data/household_power_consumption_augmented.csv
+data/smart_grid_stability_augmented.csv
+
+# ── Generated outputs (regenerate via setup_pipeline.py) ─────────────────────
+chroma_db/
+models_saved/
+logs/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
