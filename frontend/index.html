@@ -861,7 +861,7 @@ function openChat(type,title,desc,extraMetrics){
   curWidget={type,title,desc,extraMetrics};
   $('chat-title').textContent=title;
   $('chat-subtitle').textContent='Context: '+title;
-  $('ctx-pill').textContent='Context: '+title;
+  $('ctx-pill').textContent=(type==='general'?'🌐 All Widgets':'📌 Widget: ')+title;
   $('ctx-desc').textContent=desc;
   const ph = type==='general' ? 'Compare zones, incidents, stability… ask anything.' : 'Ask about '+title+'…';
   $('empty-lbl').textContent= type==='general'
@@ -883,8 +883,20 @@ function newThread(){
 function renderThreadList(){
   if(!curWidget)return;
   const t=threads[curWidget.type]||[];
-  $('thread-list').innerHTML=t.length
-    ?`<div class="t-item active" title="${curWidget.title}">${curWidget.title}</div>`:'';
+  const isGeneral=curWidget.type==='general';
+  const scopeLabel=isGeneral
+    ? '🌐 All Widgets'
+    : '📌 '+curWidget.title;
+  const scopeNote=isGeneral
+    ? 'Questions here cover all dashboard widgets.'
+    : 'Questions here are scoped to this widget only.';
+  $('thread-list').innerHTML=`
+    <div style="padding:6px 8px 10px;border-bottom:1px solid var(--border);margin-bottom:8px;">
+      <div style="font-size:11px;font-weight:700;color:var(--accent);margin-bottom:2px;">${scopeLabel}</div>
+      <div style="font-size:10px;color:var(--text3);line-height:1.4;">${scopeNote}</div>
+    </div>
+    ${t.length?`<div class="t-item active">${isGeneral?'General conversation':'This widget'} · ${t.filter(m=>m.role==='user').length} message${t.filter(m=>m.role==='user').length===1?'':'s'}</div>`:'<div style="font-size:11px;color:var(--text3);padding:4px 8px;">No messages yet</div>'}
+  `;
 }
 function renderMsgs(msgs){
   const box=$('chat-msgs'),emp=$('chat-empty');
@@ -915,11 +927,15 @@ async function sendMsg(){
   dot.innerHTML='<div class="msg-bbl"><div class="typing"><span></span><span></span><span></span></div></div>';
   box.appendChild(dot);box.scrollTop=box.scrollHeight;
 
+  // Build widget-scoped metrics — individual widgets get ONLY their slice,
+  // general chat gets the full snapshot passed via extraMetrics.
   const ctx=curWidget?{
     type:curWidget.type,
     title:curWidget.title,
     description:curWidget.desc,
-    metrics: curWidget.extraMetrics || dash,  // general chat gets full snapshot
+    metrics: curWidget.type==='general'
+      ? (curWidget.extraMetrics || buildDashboardSnapshot())
+      : _widgetMetrics(curWidget.type),
   }:null;
   try{
     const res=await fetch(`${API}/api/chat/fast`,{
@@ -940,6 +956,43 @@ async function sendMsg(){
   renderMsgs(threads[type]);
 }
 
+// Returns only the data slice relevant to a single widget type.
+// Individual widget chats must NOT receive cross-widget data.
+function _widgetMetrics(type){
+  const ic=dash.incident_counts||{};
+  const ss=dash.stability_summary||{};
+  const rd=dash.region_distribution||{};
+  const od=dash.outage_distribution||{};
+  const total=Object.values(rd).reduce((a,b)=>a+b,0)||1;
+  const zoneScores={
+    Zone_A:Math.round(100-(ic.critical||0)*8-(ic.high||0)*2),
+    Zone_B:Math.round(85 -(ic.high||0)*3),
+    Zone_C:Math.round(72 -(ic.medium||0)*1.5),
+    Zone_D:Math.round(90 -(ic.low||0)*0.5),
+  };
+  const health=Math.round(100-(ss.unstable_pct??18.3));
+  const freqHz=+(ss.mean_freq_hz??49.92).toFixed(2);
+
+  const map={
+    health:{health_score:health,health_status:health>=70?'Stable':health>=40?'Watch':'Critical',
+      unstable_pct:ss.unstable_pct,stability_p25:ss.stab_score_p25,stability_p75:ss.stab_score_p75},
+    incidents:{incident_counts:ic,total_incidents:ic.total||0},
+    zones:{zone_scores:zoneScores,region_distribution:rd,total_incidents:total},
+    stability:{stability_summary:ss,health_score:health,mean_freq_hz:freqHz},
+    outage:{outage_distribution:od,total_incidents:ic.total||0},
+    frequency:{grid_frequency_hz:freqHz,nominal_hz:50,band_min:49.8,band_max:50.2,
+      status:freqHz>=49.8&&freqHz<=50.2?'Normal':'Excursion'},
+    voltage:{nominal_band_v:'237–245V',stability_p25:ss.stab_score_p25,stability_p75:ss.stab_score_p75},
+    demand:{capacity_threshold_pct:80,incident_counts:ic,high_demand_events:od.high_demand_event||0},
+    equipment:{incident_counts:ic,outage_distribution:od},
+    anomaly:{anomaly_model:'IsolationForest+Autoencoder',region_distribution:rd,incident_counts:ic},
+    agents:{agents:['GridRetrievalAgent','FailureAnalysisAgent','RecommendationAgent',
+      'SmartMeterAgent','GridStabilityAgent'],incident_counts:ic},
+    recommendations:{stability_summary:ss,incident_counts:ic,health_score:health},
+  };
+  return map[type]||{};
+}
+
 $('chat-inp').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();}});
 $('chat-inp').addEventListener('input',function(){
   this.style.height='auto';this.style.height=Math.min(this.scrollHeight,100)+'px';
@@ -947,9 +1000,11 @@ $('chat-inp').addEventListener('input',function(){
 
 // ── Init ───────────────────────────────────────────────────────────────────
 (async function(){
-  renderAll(); // instant render with demo data
+  // Do NOT pre-render with demo data — avoids score flicker (82→36).
+  // Show loading placeholders until the API responds.
+  $('health-val').textContent='…';
   await checkHealth();
-  await loadMetrics(); // replace with real data when API is up
+  await loadMetrics(); // sets dashLoaded=true on success, renders once with real data
   setInterval(()=>{checkHealth();loadMetrics();},60000);
   setInterval(renderAgentFeed,8000);
 })();

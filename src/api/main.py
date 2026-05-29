@@ -183,7 +183,8 @@ Dashboard data:
 Be specific, technical, and actionable. Reference actual numbers from the data.
 Keep responses under 250 words unless more detail is requested."""
 
-    try:
+    async def _call_direct() -> str:
+        """Direct httpx call — fastest path, no LangChain overhead."""
         async with httpx.AsyncClient(timeout=45.0, verify=False) as client:
             resp = await client.post(
                 f"{settings.openai_base_url}/chat/completions",
@@ -202,10 +203,33 @@ Keep responses under 250 words unless more detail is requested."""
                 },
             )
             resp.raise_for_status()
-            answer = resp.json()["choices"][0]["message"]["content"].strip()
-    except httpx.TimeoutException:
-        logger.error(f"[{request_id}] Fast chat timed out after 45s")
-        answer = "Request timed out. The LLM gateway is slow right now — please try again in a moment."
+            return resp.json()["choices"][0]["message"]["content"].strip()
+
+    async def _call_langchain_fallback() -> str:
+        """LangChain fallback — uses model_router which handles key rotation."""
+        import asyncio
+        from langchain_core.messages import HumanMessage, SystemMessage
+        from src.models.model_router import get_model_router as _gmr
+        llm = _gmr().get_llm("simple", temperature=0.3)
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None, lambda: llm.invoke([
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=request.query),
+            ])
+        )
+        return response.content.strip()
+
+    answer = ""
+    try:
+        answer = await _call_direct()
+    except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.ConnectError) as e:
+        logger.warning(f"[{request_id}] Direct call failed ({type(e).__name__}), trying LangChain fallback")
+        try:
+            answer = await _call_langchain_fallback()
+        except Exception as e2:
+            logger.error(f"[{request_id}] Fallback also failed: {e2}")
+            answer = "Both LLM paths are unavailable right now. Please try again in a moment."
     except Exception as e:
         logger.error(f"[{request_id}] Fast chat error: {e}")
         answer = f"I encountered an error processing your request: {str(e)}"
