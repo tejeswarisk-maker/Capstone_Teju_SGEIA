@@ -870,10 +870,10 @@ async function sendMsg(){
 
   const ctx=curWidget?{type:curWidget.type,title:curWidget.title,description:curWidget.desc,metrics:dash}:null;
   try{
-    const res=await fetch(`${API}/api/query`,{
+    const res=await fetch(`${API}/api/chat/fast`,{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({query,widget_context:ctx,session_id:type}),
-      signal:AbortSignal.timeout(120000),
+      signal:AbortSignal.timeout(60000),
     });
     dot.remove();
     const data=await res.json();

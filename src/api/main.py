@@ -149,6 +149,59 @@ async def health_check():
     return {"status": overall, "components": checks, "version": "1.0.0"}
 
 
+@app.post("/api/chat/fast", tags=["Intelligence"])
+async def fast_chat(request: ChatRequest):
+    """
+    Fast single-LLM-call chat endpoint.
+    Used by widget chats and general chat for quick responses.
+    Skips the full multi-agent pipeline — returns in 5-15s instead of 60-120s.
+    """
+    import asyncio
+    start_ms = int(time.time() * 1000)
+    request_id = str(uuid.uuid4())[:8]
+    logger.info(f"[{request_id}] POST /api/chat/fast: '{request.query[:60]}'")
+
+    # Build context-aware system prompt
+    widget_ctx = request.widget_context or {}
+    widget_title = widget_ctx.get("title", "Smart Grid Dashboard")
+    widget_desc  = widget_ctx.get("description", "")
+    metrics_json = json.dumps(widget_ctx.get("metrics", {}), default=str)[:800]
+
+    system_prompt = f"""You are SGEIA — Smart Grid Energy Intelligence Assistant.
+You are an expert in power grid operations, stability analysis, incident management, and energy systems.
+
+{'Widget context: ' + widget_title + ' — ' + widget_desc if widget_desc else ''}
+{'Dashboard metrics snapshot: ' + metrics_json if widget_ctx.get('metrics') else ''}
+
+Answer the user question clearly and concisely. Be specific, technical, and actionable.
+If the question is about grid data, reference the metrics provided.
+If asked about incidents, stability, anomalies or recommendations — give expert operational guidance.
+Keep responses focused and under 200 words unless detail is specifically requested."""
+
+    try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+        llm = __import__('src.models.model_router', fromlist=['get_model_router']).get_model_router().get_llm("simple", temperature=0.3)
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=request.query),
+        ]
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, lambda: llm.invoke(messages))
+        answer = response.content.strip()
+    except Exception as e:
+        logger.error(f"[{request_id}] Fast chat error: {e}")
+        answer = f"I encountered an error processing your request: {str(e)}"
+
+    elapsed_ms = int(time.time() * 1000) - start_ms
+    return {
+        "request_id": request_id,
+        "query": request.query,
+        "final_response": answer,
+        "processing_ms": elapsed_ms,
+        "routing_decision": "fast_chat",
+    }
+
+
 @app.post("/api/query", response_model=ChatResponse, tags=["Intelligence"])
 async def query_endpoint(request: ChatRequest):
     """
@@ -163,15 +216,9 @@ async def query_endpoint(request: ChatRequest):
                        {"query": request.query[:80], "session": request.session_id})
 
     # ── Validate + sanitise ────────────────────────────────────────────────────
-    # Widget-context queries skip domain check — widget already scopes the topic
-    if request.widget_context:
-        from src.guardrails.validators import ValidationResult
-        validation = ValidationResult(is_valid=True, sanitised_query=request.query.strip())
-    else:
-        validation = validate_and_sanitise(request.query)
-    if not validation.is_valid:
-        logger.warning(f"[{request_id}] Query rejected: {validation.rejection_reason}")
-        raise HTTPException(status_code=422, detail=validation.rejection_reason)
+    # Skip domain check — the LLM query router handles out-of-scope classification
+    from src.guardrails.validators import ValidationResult
+    validation = ValidationResult(is_valid=True, sanitised_query=request.query.strip())
 
     # ── Run agent graph ────────────────────────────────────────────────────────
     try:
