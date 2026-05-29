@@ -82,6 +82,17 @@ class StabilityModel:
 
         # ── Load data ─────────────────────────────────────────────────────────
         df = pd.read_csv(DS1_AUGMENTED, usecols=FEATURE_COLS + [TARGET_CLASS, TARGET_REG])
+
+        # Clean bracketed values e.g. '[6.38E-1]' → 0.638 that appear in some DS1 exports
+        for col in FEATURE_COLS + [TARGET_REG]:
+            df[col] = (
+                df[col].astype(str)
+                .str.strip()
+                .str.strip("[]")
+                .pipe(pd.to_numeric, errors="coerce")
+            )
+        df = df.dropna(subset=FEATURE_COLS + [TARGET_CLASS, TARGET_REG])
+
         X  = df[FEATURE_COLS]
         y_cls = (df[TARGET_CLASS] == "unstable").astype(int)  # 1=unstable, 0=stable
         y_reg = df[TARGET_REG]

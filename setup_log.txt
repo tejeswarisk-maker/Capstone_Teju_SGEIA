@@ -1,0 +1,97 @@
+﻿python : [32m2026-05-29 17:02:24,617 [INFO    ] 
+src.data.augment_ds1 | req=N/A | DS1 augmented file already exists 
+ΓÇö loading from disk.[0m
+At line:1 char:1
++ python scripts/setup_pipeline.py 2>&1 | Out-File -FilePath 
+setup_log. ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([32m2026-05-29... from 
+    disk.[0m:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[32m2026-05-29 17:02:24,788 [INFO    ] src.data.augment_ds2 | 
+req=N/A | Starting DS2 augmentation pipeline (chunked 
+processing).[0m
+[32m2026-05-29 17:02:24,791 [INFO    ] src.data.generate_incidents 
+| req=N/A | Incidents CSV already exists ΓÇö loading from disk.[0m
+[32m2026-05-29 17:02:24,841 [INFO    ] src.models.stability_model | 
+req=N/A | Training XGBoost stability models on DS1...[0m
+D:\FDE_Repos\Capstone_Teju_SGEIA\venv\Lib\site-packages\xgboost\train
+ing.py:200: UserWarning: [17:02:26] WARNING: 
+C:\actions-runner\_work\xgboost\xgboost\src\learner.cc:782: 
+Parameters: { "use_label_encoder" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+[32m2026-05-29 17:02:28,116 [INFO    ] src.models.stability_model | 
+req=N/A | Classifier accuracy: 0.9762[0m
+[32m2026-05-29 17:02:28,786 [INFO    ] src.models.stability_model | 
+req=N/A | Regressor MAE: 0.005244[0m
+[32m2026-05-29 17:02:32,125 [INFO    ] src.models.anomaly_model | 
+req=N/A | DS1 anomaly model trained on 60000 rows.[0m
+[33m2026-05-29 17:02:32,126 [WARNING ] src.models.anomaly_model | 
+req=N/A | DS2 augmented file not found ΓÇö skipping DS2 anomaly 
+model.[0m
+[32m2026-05-29 17:02:35,599 [INFO    ] src.indexing.chroma_store | 
+req=N/A | Indexing 200 incidents into ChromaDB...[0m
+[32m2026-05-29 17:02:38,635 [INFO    ] httpx | req=N/A | HTTP 
+Request: POST https://api.openai.com/v1/embeddings "HTTP/1.1 401 
+Unauthorized"[0m
+[32m2026-05-29 17:02:38,651 [INFO    ] src.indexing.bm25_index | 
+req=N/A | Building BM25 index over 200 incidents...[0m
+[32m2026-05-29 17:02:38,679 [INFO    ] src.indexing.bm25_index | 
+req=N/A | BM25 index built: 200 docs, vocab size: 359 terms.[0m
+[32m2026-05-29 17:02:39,501 [INFO    ] src.indexing.chroma_store | 
+req=N/A | Indexing 5000 stability rows into ChromaDB...[0m
+[32m2026-05-29 17:02:39,948 [INFO    ] httpx | req=N/A | HTTP 
+Request: POST https://api.openai.com/v1/embeddings "HTTP/1.1 401 
+Unauthorized"[0m
+
+============================================================
+  SGEIA ΓÇö Pipeline Setup
+============================================================
+  Project root : D:\FDE_Repos\Capstone_Teju_SGEIA
+  Force mode   : False
+
+[Step 1] Validate environment (.env) ...
+  [OK] .env loaded from D:\FDE_Repos\Capstone_Teju_SGEIA\.env
+  ΓÜá∩╕Å  Optional env vars not set (fallback models may not work): ['GROQ_API_KEY']
+  [OK] Environment validated
+
+[Step 2] Augment DS1 (grid stability dataset) ...
+  [OK] DS1 augmentation complete
+
+[Step 3] Augment DS2 (smart meter dataset) ΓÇö may take several minutes ...
+  [FAIL] [Errno 2] No such file or directory: 'D:\\FDE_Repos\\Capstone_Teju_SGEIA\\data\\source_files\\household_power_consumption.txt'
+
+[Step 4] Generate synthetic incident corpus via GPT-4o-mini (~$0.50) ...
+  [OK] Incident corpus generated
+
+[Step 5] Train XGBoost + Isolation Forest models ...
+  [FAIL] Stability model: could not convert string to float: '[6.38E-1]'
+  [OK] Anomaly models trained
+
+[Step 6] Index incidents ΓåÆ ChromaDB + BM25 ...
+  [FAIL] ChromaDB incidents: Error code: 401 - {'error': {'message': 'Incorrect API key provided: sk-proj-********************************************************************************************************************************************************O50A. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'code': 'invalid_api_key', 'param': None}, 'status': 401} in add.
+  [OK] BM25 index built
+
+[Step 7] Index DS1 stability records into ChromaDB (slow ΓÇö ~5-10 min) ...
+  [FAIL] Error code: 401 - {'error': {'message': 'Incorrect API key provided: sk-proj-********************************************************************************************************************************************************O50A. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'code': 'invalid_api_key', 'param': None}, 'status': 401} in add.
+
+[Step 8] Smoke test (requires backend running in separate terminal) ...
+  Γä╣∩╕Å  To start backend: uvicorn src.api.main:app --host 127.0.0.1 --port 8000 --reload
+  ΓÜá∩╕Å  http://127.0.0.1:8000/api/health unreachable ΓÇö start the backend first.
+  ΓÜá∩╕Å  http://127.0.0.1:8000/api/dashboard/metrics unreachable ΓÇö start the backend first.
+
+============================================================
+  Setup Complete ΓÇö 21.5s
+============================================================
+  [OK]   env
+  [OK]   ds1
+  [FAIL] ds2
+  [OK]   incidents
+  [FAIL] models
+  [FAIL] index
+  [FAIL] stability_index
+  [FAIL] smoke
+
+[WARNING] Some steps failed: ['ds2', 'models', 'index', 'stability_index', 'smoke']. Review errors above before starting the backend.

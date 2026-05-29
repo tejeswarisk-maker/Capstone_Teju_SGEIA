@@ -57,15 +57,15 @@ def _step(n: int, label: str) -> None:
 
 
 def _ok(msg: str = "Done") -> None:
-    print(f"  ✅ {msg}")
+    print(f"  [OK] {msg}")
 
 
 def _skip(msg: str) -> None:
-    print(f"  ⏭️  Skipped: {msg}")
+    print(f"  [SKIP] {msg}")
 
 
 def _fail(msg: str) -> None:
-    print(f"  ❌ FAILED: {msg}")
+    print(f"  [FAIL] {msg}")
 
 
 # ── Step implementations ──────────────────────────────────────────────────────
@@ -321,17 +321,17 @@ def main():
     elapsed = round(time.time() - total_start, 1)
     _banner(f"Setup Complete — {elapsed}s")
     for step, ok in results.items():
-        icon = "✅" if ok else "❌"
+        icon = "[OK]  " if ok else "[FAIL]"
         print(f"  {icon} {step}")
 
     all_ok = all(results.values())
     if all_ok:
-        print("\n🚀 SGEIA is ready to serve requests!")
+        print("\nSGEIA is ready to serve requests!")
         print("   Start backend : uvicorn src.api.main:app --host 127.0.0.1 --port 8000 --reload")
         print("   Start frontend: streamlit run frontend/app.py")
     else:
         failed_steps = [k for k, v in results.items() if not v]
-        print(f"\n⚠️  Some steps failed: {failed_steps}. Review errors above before starting the backend.")
+        print(f"\n[WARNING] Some steps failed: {failed_steps}. Review errors above before starting the backend.")
         sys.exit(1)
 
 
