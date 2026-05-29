@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     # ── OpenAI (primary, paid) ────────────────────────────────────────────────
     openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"   # override for custom gateways
     openai_model_complex: str = "gpt-4o"          # root-cause, mitigation, synthesis
     openai_model_simple: str = "gpt-4o-mini"      # routing, JSON extraction, judge
     openai_embedding_model: str = "text-embedding-3-small"

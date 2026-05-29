@@ -109,6 +109,7 @@ class ModelRouter:
                 model=model_name,
                 temperature=temperature,
                 api_key=settings.openai_api_key,
+                base_url=settings.openai_base_url,
                 metadata={"provider": "openai", "fallback_model": model_name},
             )
             logger.info(f"LLM resolved: OpenAI {model_name} (complexity={complexity})")
@@ -200,6 +201,7 @@ class ModelRouter:
             embed = OpenAIEmbeddings(
                 model=settings.openai_embedding_model,
                 api_key=settings.openai_api_key,
+                base_url=settings.openai_base_url,
             )
             logger.info(f"Embeddings resolved: OpenAI {settings.openai_embedding_model}")
             return embed
