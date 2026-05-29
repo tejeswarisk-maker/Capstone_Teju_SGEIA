@@ -547,19 +547,23 @@ async function checkHealth(){
 }
 
 // ── Load metrics ───────────────────────────────────────────────────────────
+let dashLoaded = false;
+const FALLBACK_DASH = {
+  incident_counts:{critical:3,high:11,medium:24,low:47,total:85},
+  outage_distribution:{voltage_deviation:38,frequency_excursion:22,partial_outage:17,
+    full_outage:6,renewable_variability:10,high_demand_event:7},
+  region_distribution:{Zone_A:22,Zone_B:18,Zone_C:25,Zone_D:20},
+  stability_summary:{unstable_pct:18.3,mean_freq_hz:49.92,stab_score_p25:-.02,stab_score_p75:.06}
+};
 async function loadMetrics(){
   try{
     const r=await fetch(`${API}/api/dashboard/metrics`,{signal:AbortSignal.timeout(12000)});
     if(!r.ok)throw new Error();
     dash=await r.json();
+    dashLoaded=true;
   }catch{
-    dash={
-      incident_counts:{critical:3,high:11,medium:24,low:47,total:85},
-      outage_distribution:{voltage_deviation:38,frequency_excursion:22,partial_outage:17,
-        full_outage:6,renewable_variability:10,high_demand_event:7},
-      region_distribution:{Zone_A:22,Zone_B:18,Zone_C:25,Zone_D:20},
-      stability_summary:{unstable_pct:18.3,mean_freq_hz:49.92,stab_score_p25:-.02,stab_score_p75:.06}
-    };
+    // Only use fallback if we've never loaded real data — avoids flipping health score
+    if(!dashLoaded) dash=FALLBACK_DASH;
   }
   renderAll();
 }
@@ -619,7 +623,8 @@ function renderStabilityTrend(){
   const labs=[],pts=[];
   for(let h=1;h<=23;h++){
     labs.push(String(h).padStart(2,'0')+':00');
-    pts.push(+(Math.sin(h/3.8)*0.04+(Math.random()*.018-.009)).toFixed(4));
+    // Deterministic noise: sin combo avoids random flicker on theme change
+    pts.push(+(Math.sin(h/3.8)*0.04+Math.sin(h*1.7)*0.008).toFixed(4));
   }
   destroyChart('stab-c');
   charts['stab-c']=new Chart($('stab-c'),{
@@ -670,7 +675,7 @@ function renderFrequency(){
   const el=$('freq-val');
   el.textContent=f.toFixed(2);
   el.style.color=(f>=49.8&&f<=50.2)?'var(--green)':'var(--red)';
-  const pts=Array.from({length:40},()=>+(f+(Math.random()-.5)*.04).toFixed(4));
+  const pts=Array.from({length:40},(_,i)=>+(f+Math.sin(i*0.8)*0.015+Math.sin(i*1.9)*0.007).toFixed(4));
   destroyChart('freq-c');
   charts['freq-c']=new Chart($('freq-c'),{
     type:'line',
@@ -703,7 +708,7 @@ function renderDemand(){
   const labs=[],actual=[],fcast=[];
   for(let h=0;h<=23;h++){
     labs.push(String(h).padStart(2,'0')+':00');
-    const a=3+Math.sin(h/4.2)*2.5+Math.random()*.4;
+    const a=3+Math.sin(h/4.2)*2.5+Math.sin(h*2.3)*0.18;
     actual.push(+a.toFixed(2));
     fcast.push(h>=19?+(a*1.08).toFixed(2):null);
   }

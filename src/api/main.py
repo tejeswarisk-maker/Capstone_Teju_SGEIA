@@ -155,8 +155,9 @@ async def fast_chat(request: ChatRequest):
     Fast single-LLM-call chat endpoint.
     Used by widget chats and general chat for quick responses.
     Skips the full multi-agent pipeline — returns in 5-15s instead of 60-120s.
+    Uses direct httpx call (no LangChain overhead) for speed.
     """
-    import asyncio
+    import httpx
     start_ms = int(time.time() * 1000)
     request_id = str(uuid.uuid4())[:8]
     logger.info(f"[{request_id}] POST /api/chat/fast: '{request.query[:60]}'")
@@ -183,20 +184,34 @@ Be specific, technical, and actionable. Reference actual numbers from the data.
 Keep responses under 250 words unless more detail is requested."""
 
     try:
-        from langchain_core.messages import HumanMessage, SystemMessage
-        llm = __import__('src.models.model_router', fromlist=['get_model_router']).get_model_router().get_llm("simple", temperature=0.3)
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=request.query),
-        ]
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(None, lambda: llm.invoke(messages))
-        answer = response.content.strip()
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            resp = await client.post(
+                f"{settings.openai_base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.openai_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.openai_model_simple,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user",   "content": request.query},
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 400,
+                },
+            )
+            resp.raise_for_status()
+            answer = resp.json()["choices"][0]["message"]["content"].strip()
+    except httpx.TimeoutException:
+        logger.error(f"[{request_id}] Fast chat timed out after 45s")
+        answer = "Request timed out. The LLM gateway is slow right now — please try again in a moment."
     except Exception as e:
         logger.error(f"[{request_id}] Fast chat error: {e}")
         answer = f"I encountered an error processing your request: {str(e)}"
 
     elapsed_ms = int(time.time() * 1000) - start_ms
+    logger.info(f"[{request_id}] Fast chat done in {elapsed_ms}ms")
     return {
         "request_id": request_id,
         "query": request.query,
