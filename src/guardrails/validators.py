@@ -27,12 +27,20 @@ logger = get_logger(__name__)
 
 # ── Domain keywords — at least one must appear in a valid grid query ──────────
 DOMAIN_KEYWORDS = [
+    # Core grid terms
     "grid", "power", "energy", "voltage", "current", "transformer", "substation",
     "outage", "stability", "frequency", "meter", "smart meter", "demand", "load",
     "watt", "kwh", "ampere", "circuit", "fault", "trip", "overload", "distribution",
     "transmission", "feeder", "relay", "scada", "renewable", "solar", "wind",
     "zone", "region", "incident", "anomaly", "deviation", "excursion", "failure",
     "restoration", "equipment", "infrastructure", "forecast", "consumption", "peak",
+    # Widget / dashboard context terms
+    "health", "score", "critical", "high", "medium", "low", "severity", "risk",
+    "mitigation", "recommendation", "analysis", "trend", "monitor", "detect",
+    "explain", "summarise", "summarize", "compare", "show", "why", "what", "how",
+    "rate", "count", "status", "feed", "agent", "bank", "cluster", "phase",
+    "cascade", "instability", "dip", "spike", "drop", "imbalance", "safe", "limit",
+    "INC", "AN-", "zone_a", "zone_b", "zone_c", "zone_d", "sm-c", "t-22",
 ]
 
 # Query length constraints
@@ -133,6 +141,8 @@ def validate_and_sanitise(raw_query: str) -> ValidationResult:
         return ValidationResult(is_valid=False, rejection_reason=format_error)
 
     # ── Layer 2: Domain relevance ─────────────────────────────────────────────
+    # Widget-context queries are always allowed — the widget already scopes them
+    # to a grid domain. Only reject pure free-text with no grid keywords.
     if not _check_domain_relevance(raw_query):
         reason = (
             "Your query doesn't appear to be related to power grid or energy systems. "

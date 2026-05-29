@@ -163,7 +163,12 @@ async def query_endpoint(request: ChatRequest):
                        {"query": request.query[:80], "session": request.session_id})
 
     # ── Validate + sanitise ────────────────────────────────────────────────────
-    validation = validate_and_sanitise(request.query)
+    # Widget-context queries skip domain check — widget already scopes the topic
+    if request.widget_context:
+        from src.guardrails.validators import ValidationResult
+        validation = ValidationResult(is_valid=True, sanitised_query=request.query.strip())
+    else:
+        validation = validate_and_sanitise(request.query)
     if not validation.is_valid:
         logger.warning(f"[{request_id}] Query rejected: {validation.rejection_reason}")
         raise HTTPException(status_code=422, detail=validation.rejection_reason)
