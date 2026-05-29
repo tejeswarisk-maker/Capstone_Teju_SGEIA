@@ -910,7 +910,7 @@ function renderMsgs(msgs){
   });
   box.scrollTop=box.scrollHeight;
 }
-// ── Instant local answer engine — no LLM call needed for factual questions ─
+// ── Instant local answer engine ────────────────────────────────────────────
 function _localAnswer(query, widgetType){
   const q=query.toLowerCase();
   const ic=dash.incident_counts||{};
@@ -921,83 +921,106 @@ function _localAnswer(query, widgetType){
   const freq=+(ss.mean_freq_hz??49.92).toFixed(2);
   const healthLbl=health>=70?'Stable ✅':health>=40?'Watch ⚠️':'Critical 🔴';
   const freqOk=freq>=49.8&&freq<=50.2;
+  const total=ic.total||0;
 
-  // Zone scores
-  const zoneScore=(z)=>{
-    const base={Zone_A:Math.round(100-(ic.critical||0)*8-(ic.high||0)*2),
-      Zone_B:Math.round(85-(ic.high||0)*3),
-      Zone_C:Math.round(72-(ic.medium||0)*1.5),
-      Zone_D:Math.round(90-(ic.low||0)*0.5)};
-    return base[z]??'—';
+  // Per-zone data (each zone has its own incident share + derived health)
+  const zoneIncidents={Zone_A:rd.Zone_A||0,Zone_B:rd.Zone_B||0,Zone_C:rd.Zone_C||0,Zone_D:rd.Zone_D||0};
+  const totalInc=Object.values(zoneIncidents).reduce((a,b)=>a+b,0)||1;
+  const zoneHealth=(z)=>{
+    // Zone health = global health weighted inversely by that zone's incident share
+    const share=zoneIncidents[z]/totalInc;
+    const score=Math.round(health*(1-share*0.4));
+    return Math.max(10,Math.min(100,score));
   };
+  const zLbl=(s)=>s>=70?'Stable ✅':s>=40?'Watch ⚠️':'Critical 🔴';
+  const allZones=()=>['Zone_A','Zone_B','Zone_C','Zone_D'].map(z=>{
+    const s=zoneHealth(z);
+    return `• **${z}**: Health ${s}/100 (${zLbl(s)}) — ${zoneIncidents[z]} incidents (${((zoneIncidents[z]/totalInc)*100).toFixed(1)}% share)`;
+  }).join('\n');
 
-  // ── Health widget ──────────────────────────────────────────────────────────
+  // ── ZONE-SPECIFIC question — check FIRST before any other pattern ──────────
+  const zoneMatch=q.match(/zone[_\s-]?([abcd])\b/i);
+  if(zoneMatch){
+    const z='Zone_'+zoneMatch[1].toUpperCase();
+    const zs=zoneHealth(z);
+    const zi=zoneIncidents[z];
+    const zpct=((zi/totalInc)*100).toFixed(1);
+    if(/calculat|deriv|how|formula|based/i.test(q))
+      return `**${z} Health Score: ${zs}/100 (${zLbl(zs)})**\n\nFormula: Global health (${health}) × (1 − zone_incident_share × 0.4)\n• ${z} incident share: ${zi}/${totalInc} = ${zpct}%\n• Zone score = ${health} × (1 − ${zpct}% × 0.4) ≈ **${zs}**\n\nIncidents in ${z}: **${zi}** (${zpct}% of all incidents)`;
+    if(/incident|outage|event/i.test(q))
+      return `**${z} — Active Incidents**\n\n• Total incidents in ${z}: **${zi}**\n• Share of all incidents: **${zpct}%** (${zi} of ${totalInc})\n• Zone Health Score: **${zs}/100 (${zLbl(zs)})**\n\nGlobal incident breakdown — Critical: ${ic.critical||0}, High: ${ic.high||0}, Medium: ${ic.medium||0}, Low: ${ic.low||0}.`;
+    // Default zone question — health + incidents
+    return `**${z} Status**\n\n• Zone Health Score: **${zs}/100 (${zLbl(zs)})**\n• Active incidents: **${zi}** (${zpct}% of ${totalInc} total)\n• Grid frequency: ${freq} Hz ${freqOk?'✅':'🔴'}\n\n${zs<40?'⚠️ This zone is in critical state — immediate attention required.':zs<70?'⚠️ This zone is under watch — monitor stability trends.':'✅ This zone is operating normally.'}`;
+  }
+
+  // ── HOW IS HEALTH/SCORE CALCULATED ─────────────────────────────────────────
+  if(/how.*(calculat|comput|deriv|work|formula|score.*made|core|calcul)/i.test(q)||/calculat.*health|formula.*health|health.*formula/i.test(q))
+    return `**How Grid Health Score is Calculated**\n\nFormula: **Health Score = 100 − Unstable %**\n\n1. The **XGBoost classifier** runs on DS1 telemetry (τ1–τ4, P1–P4, G1–G4 features)\n2. Each row is labelled "stable" or "unstable"\n3. **Unstable % = ${ss.unstable_pct?.toFixed(1)??'63.8'}%** of rows are unstable\n4. **Score = 100 − ${ss.unstable_pct?.toFixed(1)??'63.8'} = ${health}**\n\nAdditional inputs:\n• Isolation Forest anomaly flags (DS2 smart meter data)\n• Grid frequency deviation from 50 Hz (currently ${freq} Hz)\n\nThresholds: ≥70 = Stable ✅, 40–69 = Watch ⚠️, <40 = Critical 🔴`;
+
+  // ── HEALTH widget ──────────────────────────────────────────────────────────
   if(widgetType==='health'){
-    if(/update|refresh|interval|how (often|much|frequent)/i.test(query))
-      return `The Grid Health Score refreshes every **60 seconds** from the live API. It is derived from the XGBoost stability model — currently **${health}/100 (${healthLbl})**, computed as 100 − unstable_pct (${ss.unstable_pct?.toFixed(1)??'18.3'}%).`;
-    if(/score|health|value|number|current/i.test(query))
-      return `Current Grid Health Score: **${health}/100 — ${healthLbl}**.\n\n• Unstable %: ${ss.unstable_pct?.toFixed(1)??'18.3'}%\n• Stab score P25/P75: ${ss.stab_score_p25?.toFixed(4)??'—'} / ${ss.stab_score_p75?.toFixed(4)??'—'}\n\nScore ≥70 = Stable, 40–69 = Watch, <40 = Critical.`;
-    if(/critical|threshold|limit|safe/i.test(query))
-      return `Thresholds: **≥70 = Stable ✅**, **40–69 = Watch ⚠️**, **<40 = Critical 🔴**. Current score is **${health}** — ${healthLbl}.`;
-    if(/model|how.*calculat|xgboost|formula/i.test(query))
-      return `The health score = 100 − unstable_pct, where unstable_pct (${ss.unstable_pct?.toFixed(1)??'?'}%) is the fraction of DS1 telemetry rows the XGBoost classifier labels "unstable". Additional signals: Isolation Forest anomaly flags and grid frequency deviation (${freq} Hz).`;
+    if(/update|refresh|interval|how.*(often|much|frequent|long)/i.test(q))
+      return `The Grid Health Score refreshes every **60 seconds**. Current: **${health}/100 (${healthLbl})**, computed as 100 − ${ss.unstable_pct?.toFixed(1)??'?'}% unstable readings.`;
+    if(/threshold|limit|safe|critical|range/i.test(q))
+      return `Score thresholds:\n\n• **≥70 → Stable ✅**\n• **40–69 → Watch ⚠️**\n• **<40 → Critical 🔴**\n\nCurrent: **${health}/100 — ${healthLbl}**`;
+    // Generic health question
+    return `**Grid Health Score: ${health}/100 — ${healthLbl}**\n\n• Unstable telemetry: ${ss.unstable_pct?.toFixed(1)??'?'}%\n• Stability P25/P75: ${ss.stab_score_p25?.toFixed(4)??'—'} / ${ss.stab_score_p75?.toFixed(4)??'—'}\n• Frequency: ${freq} Hz ${freqOk?'✅':'🔴'}\n\nRefreshes every 60 seconds.`;
   }
 
-  // ── Incidents widget ───────────────────────────────────────────────────────
+  // ── INCIDENTS widget ───────────────────────────────────────────────────────
   if(widgetType==='incidents'){
-    if(/total|all|count|how many/i.test(query))
-      return `Total incidents: **${ic.total||0}**\n\n• 🔴 Critical: ${ic.critical||0}\n• 🟠 High: ${ic.high||0}\n• 🔵 Medium: ${ic.medium||0}\n• ⚪ Low: ${ic.low||0}`;
-    if(/critical/i.test(query)) return `There are **${ic.critical||0} critical incidents** currently — these are full outage events requiring immediate response.`;
-    if(/high/i.test(query)) return `There are **${ic.high||0} high-severity incidents** — typically frequency excursions or partial outages.`;
-    if(/medium/i.test(query)) return `There are **${ic.medium||0} medium-severity incidents** — voltage deviations and high demand events.`;
-    if(/low/i.test(query)) return `There are **${ic.low||0} low-severity incidents** — minor anomalies and renewable variability events.`;
+    if(/critical/i.test(q)&&!/high|medium|low/i.test(q))
+      return `**Critical incidents: ${ic.critical||0}**\nThese are full outage events requiring immediate response. (${(((ic.critical||0)/total)*100).toFixed(1)}% of all ${total} incidents)`;
+    if(/high/i.test(q)&&!/critical|medium|low/i.test(q))
+      return `**High-severity incidents: ${ic.high||0}**\nTypically frequency excursions and partial outages. (${(((ic.high||0)/total)*100).toFixed(1)}% of all ${total})`;
+    if(/medium/i.test(q))
+      return `**Medium incidents: ${ic.medium||0}** — voltage deviations and high demand events. (${(((ic.medium||0)/total)*100).toFixed(1)}% of all ${total})`;
+    if(/low/i.test(q))
+      return `**Low incidents: ${ic.low||0}** — minor anomalies and renewable variability. (${(((ic.low||0)/total)*100).toFixed(1)}% of all ${total})`;
+    return `**Active Incidents: ${total} total**\n\n• 🔴 Critical: ${ic.critical||0} (${(((ic.critical||0)/total)*100).toFixed(1)}%)\n• 🟠 High: ${ic.high||0} (${(((ic.high||0)/total)*100).toFixed(1)}%)\n• 🔵 Medium: ${ic.medium||0} (${(((ic.medium||0)/total)*100).toFixed(1)}%)\n• ⚪ Low: ${ic.low||0} (${(((ic.low||0)/total)*100).toFixed(1)}%)`;
   }
 
-  // ── Frequency widget ───────────────────────────────────────────────────────
+  // ── FREQUENCY widget ───────────────────────────────────────────────────────
   if(widgetType==='frequency'){
-    if(/current|value|reading|hz/i.test(query))
-      return `Current grid frequency: **${freq} Hz** — ${freqOk?'✅ Normal (within 49.8–50.2 Hz band)':'🔴 EXCURSION — outside safe band!'}.\n\nNominal is 50.00 Hz. Deviations trigger automatic frequency regulation and, if sustained, generate frequency_excursion incidents.`;
-    if(/nominal|safe|band|range/i.test(query))
-      return `Safe operating band: **49.8 – 50.2 Hz**. Current: **${freq} Hz** (${freqOk?'within band ✅':'outside band 🔴'}). Automatic frequency regulation engages on any deviation beyond ±0.2 Hz.`;
+    if(/band|range|safe|nominal|limit/i.test(q))
+      return `Safe band: **49.8–50.2 Hz**. Current: **${freq} Hz** (${freqOk?'✅ within band':'🔴 outside band — excursion!'}). Deviations beyond ±0.2 Hz trigger automatic frequency regulation.`;
+    return `**Grid Frequency: ${freq} Hz** — ${freqOk?'✅ Normal':'🔴 Excursion!'}\n\nNominal: 50.00 Hz | Safe band: 49.8–50.2 Hz\nDeviation: ${Math.abs(freq-50).toFixed(3)} Hz ${freqOk?'(within tolerance)':'(outside tolerance — AFC engaged)'}`;
   }
 
-  // ── Zones widget ───────────────────────────────────────────────────────────
+  // ── ZONES widget ───────────────────────────────────────────────────────────
   if(widgetType==='zones'){
-    const scores={Zone_A:zoneScore('Zone_A'),Zone_B:zoneScore('Zone_B'),Zone_C:zoneScore('Zone_C'),Zone_D:zoneScore('Zone_D')};
-    const worst=Object.entries(scores).sort((a,b)=>a[1]-b[1])[0];
-    const best=Object.entries(scores).sort((a,b)=>b[1]-a[1])[0];
-    if(/worst|most unstable|lowest/i.test(query))
-      return `Most stressed zone: **${worst[0]}** with health score **${worst[1]}/100**. Incident share: ${rd[worst[0]]||0} incidents.`;
-    if(/best|most stable|highest/i.test(query))
-      return `Healthiest zone: **${best[0]}** with health score **${best[1]}/100**. Incident share: ${rd[best[0]]||0} incidents.`;
-    if(/all|each|every|zone/i.test(query))
-      return `Zone health scores:\n\n• Zone_A: **${scores.Zone_A}/100** — ${rd.Zone_A||0} incidents\n• Zone_B: **${scores.Zone_B}/100** — ${rd.Zone_B||0} incidents\n• Zone_C: **${scores.Zone_C}/100** — ${rd.Zone_C||0} incidents\n• Zone_D: **${scores.Zone_D}/100** — ${rd.Zone_D||0} incidents`;
+    const entries=Object.entries(zoneIncidents);
+    const worst=entries.sort((a,b)=>zoneHealth(a[0])-zoneHealth(b[0]))[0][0];
+    const best=entries.sort((a,b)=>zoneHealth(b[0])-zoneHealth(a[0]))[0][0];
+    if(/worst|most unstable|lowest|critical/i.test(q))
+      return `Most stressed zone: **${worst}** — Health **${zoneHealth(worst)}/100 (${zLbl(zoneHealth(worst))})**, ${zoneIncidents[worst]} incidents.`;
+    if(/best|most stable|highest/i.test(q))
+      return `Healthiest zone: **${best}** — Health **${zoneHealth(best)}/100 (${zLbl(zoneHealth(best))})**, ${zoneIncidents[best]} incidents.`;
+    return `**All Zone Health Scores**\n\n${allZones()}`;
   }
 
-  // ── Stability widget ───────────────────────────────────────────────────────
+  // ── STABILITY widget ───────────────────────────────────────────────────────
   if(widgetType==='stability'){
-    if(/score|stab|value/i.test(query))
-      return `Stability regression score (from XGBoost DS1 model):\n\n• P25 (lower quartile): **${ss.stab_score_p25?.toFixed(4)??'—'}**\n• P75 (upper quartile): **${ss.stab_score_p75?.toFixed(4)??'—'}**\n• Warning threshold: >0.06 (red dashed line)`;
-    if(/unstable|percent|pct/i.test(query))
-      return `**${ss.unstable_pct?.toFixed(1)??'18.3'}%** of telemetry readings are classified as unstable by the XGBoost model. This directly sets the Grid Health Score to ${health}/100.`;
+    if(/unstable|percent|pct/i.test(q))
+      return `**${ss.unstable_pct?.toFixed(1)??'?'}%** of DS1 telemetry is classified unstable → Grid Health = **${health}/100**.`;
+    return `**Stability Regression Scores (XGBoost on DS1)**\n\n• P25: **${ss.stab_score_p25?.toFixed(4)??'—'}**\n• P75: **${ss.stab_score_p75?.toFixed(4)??'—'}**\n• Warning threshold: >0.06 (red line)\n• Unstable fraction: ${ss.unstable_pct?.toFixed(1)??'?'}%`;
   }
 
-  // ── General chat — cross-widget ────────────────────────────────────────────
+  // ── GENERAL chat — cross-widget answers ───────────────────────────────────
   if(widgetType==='general'){
-    const snap=buildDashboardSnapshot();
-    if(/health.*score|score.*health/i.test(query))
-      return `Grid Health Score: **${health}/100 — ${healthLbl}**. Based on ${ss.unstable_pct?.toFixed(1)??'?'}% unstable telemetry readings.`;
-    if(/frequency/i.test(query))
-      return `Grid frequency: **${freq} Hz** — ${freqOk?'✅ Normal':'🔴 Excursion!'}. Safe band: 49.8–50.2 Hz.`;
-    if(/incident|outage/i.test(query))
-      return `Active incidents: **${ic.total||0} total** — ${ic.critical||0} Critical, ${ic.high||0} High, ${ic.medium||0} Medium, ${ic.low||0} Low.\n\nTop outage types: ${Object.entries(od).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,v])=>`${k.replace(/_/g,' ')}: ${v}`).join(', ')}.`;
-    if(/zone/i.test(query))
-      return `Zone distribution (incidents): Zone_A: ${rd.Zone_A||0}, Zone_B: ${rd.Zone_B||0}, Zone_C: ${rd.Zone_C||0}, Zone_D: ${rd.Zone_D||0}. Grid Health: ${health}/100 (${healthLbl}).`;
-    if(/summary|overview|status|dashboard/i.test(query))
-      return `**SGEIA Dashboard Summary**\n\n• Grid Health: **${health}/100 (${healthLbl})**\n• Frequency: **${freq} Hz** ${freqOk?'✅':'🔴'}\n• Incidents: **${ic.total||0}** (${ic.critical||0} Critical, ${ic.high||0} High)\n• Unstable telemetry: **${ss.unstable_pct?.toFixed(1)??'?'}%**\n• Zones: A=${rd.Zone_A||0}, B=${rd.Zone_B||0}, C=${rd.Zone_C||0}, D=${rd.Zone_D||0} incidents`;
+    if(/summary|overview|status|dashboard|all widget/i.test(q))
+      return `**SGEIA Dashboard Summary**\n\n• Grid Health: **${health}/100 (${healthLbl})**\n• Frequency: **${freq} Hz** ${freqOk?'✅':'🔴'}\n• Incidents: **${total}** (${ic.critical||0} Critical, ${ic.high||0} High, ${ic.medium||0} Medium, ${ic.low||0} Low)\n• Unstable telemetry: **${ss.unstable_pct?.toFixed(1)??'?'}%**\n\n**Zone breakdown:**\n${allZones()}`;
+    if(/frequency/i.test(q))
+      return `Grid frequency: **${freq} Hz** — ${freqOk?'✅ Normal (within 49.8–50.2 Hz)':'🔴 Excursion!'}`;
+    if(/incident|outage/i.test(q))
+      return `**Active Incidents: ${total} total**\n\n• 🔴 Critical: ${ic.critical||0}\n• 🟠 High: ${ic.high||0}\n• 🔵 Medium: ${ic.medium||0}\n• ⚪ Low: ${ic.low||0}\n\nTop outage types: ${Object.entries(od).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,v])=>`${k.replace(/_/g,' ')} (${v})`).join(', ')}`;
+    if(/health|score/i.test(q))
+      return `Grid Health Score: **${health}/100 — ${healthLbl}**\nBased on ${ss.unstable_pct?.toFixed(1)??'?'}% unstable telemetry. Refreshes every 60s.`;
+    if(/all zone|zone.*all|compare.*zone/i.test(q))
+      return `**All Zone Health Scores**\n\n${allZones()}`;
   }
 
-  return null; // No local answer — fall through to API
+  return null; // fall through to API
 }
 
 async function sendMsg(){
