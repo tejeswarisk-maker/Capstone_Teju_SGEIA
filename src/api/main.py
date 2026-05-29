@@ -20,7 +20,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from src.agents.graph import run_query
@@ -53,6 +54,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Serve frontend static files ────────────────────────────────────────────────
+import os as _os
+_frontend_dir = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(__file__))), "frontend")
+if _os.path.isdir(_frontend_dir):
+    app.mount("/static", StaticFiles(directory=_frontend_dir), name="static")
+
+
+@app.get("/", include_in_schema=False)
+async def serve_dashboard():
+    """Serve the HTML dashboard at the root URL."""
+    index_path = _os.path.join(_frontend_dir, "index.html")
+    if _os.path.exists(index_path):
+        return FileResponse(index_path)
+    return JSONResponse({"message": "SGEIA API running. Dashboard not found."}, status_code=200)
 
 
 # ── Request / Response models ──────────────────────────────────────────────────

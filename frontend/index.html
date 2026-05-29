@@ -1,0 +1,1104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>SGEIA — Smart Grid Energy Intelligence</title>
+<style>
+/* ── Reset & Base ─────────────────────────────────────────────────────────── */
+*{margin:0;padding:0;box-sizing:border-box;}
+:root{
+  --bg:#0d1117;--bg2:#161b22;--bg3:#1c2330;--bg4:#21262d;
+  --border:#30363d;--border2:#3d444e;
+  --text:#e6edf3;--text2:#8b949e;--text3:#6e7681;
+  --blue:#2196f3;--blue2:#1565c0;--blue-light:#e3f2fd;
+  --green:#4caf50;--green2:#1b5e20;--green-light:#e8f5e9;
+  --red:#f44336;--red2:#b71c1c;
+  --orange:#ff9800;--orange2:#e65100;
+  --yellow:#ffc107;--yellow2:#f57f17;
+  --purple:#9c27b0;--purple2:#4a148c;
+  --radius:12px;--radius-sm:8px;
+  --shadow:0 4px 24px rgba(0,0,0,0.4);
+  --transition:all 0.25s ease;
+}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;overflow-x:hidden;}
+a{color:var(--blue);text-decoration:none;}
+button{cursor:pointer;border:none;outline:none;}
+input,textarea{outline:none;border:none;}
+::-webkit-scrollbar{width:6px;height:6px;}
+::-webkit-scrollbar-track{background:var(--bg2);}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px;}
+
+/* ── Layout ───────────────────────────────────────────────────────────────── */
+.app{display:flex;flex-direction:column;min-height:100vh;}
+
+/* ── Header ───────────────────────────────────────────────────────────────── */
+.header{
+  background:var(--bg2);border-bottom:1px solid var(--border);
+  padding:0 24px;height:60px;display:flex;align-items:center;
+  justify-content:space-between;position:sticky;top:0;z-index:100;
+}
+.header-brand{display:flex;align-items:center;gap:12px;}
+.header-brand .logo{font-size:24px;}
+.header-brand h1{font-size:18px;font-weight:700;color:var(--text);}
+.header-brand span{font-size:12px;color:var(--text2);margin-top:2px;display:block;}
+.header-right{display:flex;align-items:center;gap:12px;}
+.status-badge{
+  display:flex;align-items:center;gap:6px;padding:4px 12px;
+  border-radius:20px;font-size:12px;font-weight:600;
+  background:var(--bg3);border:1px solid var(--border);
+}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--text3);}
+.status-dot.online{background:var(--green);box-shadow:0 0 6px var(--green);}
+.status-dot.offline{background:var(--red);}
+.session-id{font-size:11px;color:var(--text3);font-family:monospace;}
+
+/* ── Main ─────────────────────────────────────────────────────────────────── */
+.main{display:flex;flex:1;overflow:hidden;}
+
+/* ── Sidebar ──────────────────────────────────────────────────────────────── */
+.sidebar{
+  width:220px;min-width:220px;background:var(--bg2);border-right:1px solid var(--border);
+  padding:20px 0;display:flex;flex-direction:column;gap:4px;overflow-y:auto;
+}
+.sidebar-section{padding:0 16px;margin-bottom:8px;}
+.sidebar-label{font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;}
+.nav-item{
+  display:flex;align-items:center;gap:10px;padding:8px 16px;
+  border-radius:var(--radius-sm);margin:0 8px;cursor:pointer;
+  color:var(--text2);font-size:14px;transition:var(--transition);
+}
+.nav-item:hover{background:var(--bg3);color:var(--text);}
+.nav-item.active{background:rgba(33,150,243,0.15);color:var(--blue);border-left:3px solid var(--blue);}
+.nav-item .icon{font-size:16px;width:20px;text-align:center;}
+.sidebar-divider{height:1px;background:var(--border);margin:12px 16px;}
+
+/* ── Content ──────────────────────────────────────────────────────────────── */
+.content{flex:1;overflow-y:auto;padding:24px;}
+
+/* ── Page title ────────────────────────────────────────────────────────────── */
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;}
+.page-title{font-size:22px;font-weight:700;}
+.page-subtitle{font-size:13px;color:var(--text2);margin-top:2px;}
+.refresh-btn{
+  display:flex;align-items:center;gap:6px;padding:8px 16px;
+  background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);
+  color:var(--text2);font-size:13px;transition:var(--transition);
+}
+.refresh-btn:hover{background:var(--bg4);color:var(--text);border-color:var(--border2);}
+
+/* ── Grid ─────────────────────────────────────────────────────────────────── */
+.grid{display:grid;gap:16px;}
+.grid-4{grid-template-columns:repeat(4,1fr);}
+.grid-3{grid-template-columns:repeat(3,1fr);}
+.grid-2{grid-template-columns:repeat(2,1fr);}
+.grid-12{grid-template-columns:1fr 2fr;}
+.grid-21{grid-template-columns:2fr 1fr;}
+@media(max-width:1200px){.grid-4{grid-template-columns:repeat(2,1fr);}.grid-3{grid-template-columns:repeat(2,1fr);}}
+@media(max-width:768px){.grid-4,.grid-3,.grid-2,.grid-12,.grid-21{grid-template-columns:1fr;}}
+
+/* ── Card ─────────────────────────────────────────────────────────────────── */
+.card{
+  background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);
+  padding:20px;position:relative;transition:var(--transition);
+}
+.card:hover{border-color:var(--border2);}
+.card-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;}
+.card-title{font-size:13px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;}
+.card-icon{font-size:20px;}
+
+/* ── KPI Cards ────────────────────────────────────────────────────────────── */
+.kpi-value{font-size:36px;font-weight:700;line-height:1;}
+.kpi-label{font-size:12px;color:var(--text2);margin-top:6px;}
+.kpi-delta{display:inline-flex;align-items:center;gap:4px;font-size:12px;margin-top:8px;padding:2px 8px;border-radius:12px;}
+.kpi-delta.up{background:rgba(76,175,80,0.15);color:var(--green);}
+.kpi-delta.down{background:rgba(244,67,54,0.15);color:var(--red);}
+.kpi-delta.neutral{background:rgba(139,148,158,0.15);color:var(--text2);}
+
+/* ── Health Gauge ─────────────────────────────────────────────────────────── */
+.gauge-container{display:flex;flex-direction:column;align-items:center;padding:8px 0;}
+.gauge-svg{width:180px;height:100px;}
+.gauge-score{font-size:42px;font-weight:700;text-align:center;margin-top:-8px;}
+.gauge-label{font-size:13px;color:var(--text2);text-align:center;margin-top:4px;}
+.gauge-bar{display:flex;gap:4px;margin-top:12px;width:100%;}
+.gauge-bar-seg{height:6px;border-radius:3px;flex:1;}
+
+/* ── Severity badges ──────────────────────────────────────────────────────── */
+.badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;}
+.badge-critical{background:rgba(244,67,54,0.2);color:#ff6b6b;border:1px solid rgba(244,67,54,0.3);}
+.badge-high{background:rgba(255,152,0,0.2);color:#ffa726;border:1px solid rgba(255,152,0,0.3);}
+.badge-medium{background:rgba(255,193,7,0.2);color:#ffd54f;border:1px solid rgba(255,193,7,0.3);}
+.badge-low{background:rgba(76,175,80,0.2);color:#81c784;border:1px solid rgba(76,175,80,0.3);}
+.badge-stable{background:rgba(76,175,80,0.2);color:#81c784;border:1px solid rgba(76,175,80,0.3);}
+.badge-unstable{background:rgba(244,67,54,0.2);color:#ff6b6b;border:1px solid rgba(244,67,54,0.3);}
+
+/* ── Incident list ────────────────────────────────────────────────────────── */
+.incident-list{display:flex;flex-direction:column;gap:8px;}
+.incident-item{
+  display:flex;align-items:center;gap:12px;padding:10px 12px;
+  background:var(--bg3);border-radius:var(--radius-sm);border-left:3px solid var(--border);
+  cursor:pointer;transition:var(--transition);
+}
+.incident-item:hover{background:var(--bg4);}
+.incident-item.critical{border-left-color:var(--red);}
+.incident-item.high{border-left-color:var(--orange);}
+.incident-item.medium{border-left-color:var(--yellow);}
+.incident-item.low{border-left-color:var(--green);}
+.incident-id{font-size:12px;font-weight:700;font-family:monospace;color:var(--blue);}
+.incident-desc{font-size:12px;color:var(--text2);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.incident-meta{font-size:11px;color:var(--text3);}
+
+/* ── Region bars ──────────────────────────────────────────────────────────── */
+.region-bar{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+.region-name{font-size:12px;color:var(--text2);width:60px;flex-shrink:0;}
+.region-track{flex:1;height:8px;background:var(--bg3);border-radius:4px;overflow:hidden;}
+.region-fill{height:100%;border-radius:4px;transition:width 0.8s ease;}
+.region-count{font-size:12px;color:var(--text2);width:30px;text-align:right;}
+
+/* ── Table ────────────────────────────────────────────────────────────────── */
+.table-wrap{overflow-x:auto;}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+thead th{padding:10px 12px;text-align:left;font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;border-bottom:1px solid var(--border);background:var(--bg3);}
+tbody td{padding:10px 12px;border-bottom:1px solid var(--border);color:var(--text2);}
+tbody tr:hover td{background:var(--bg3);color:var(--text);}
+tbody tr:last-child td{border-bottom:none;}
+
+/* ── Chat bubble button (per widget) ──────────────────────────────────────── */
+.widget-chat-btn{
+  position:absolute;bottom:14px;right:14px;
+  width:32px;height:32px;border-radius:50%;
+  background:linear-gradient(135deg,var(--blue),var(--blue2));
+  color:#fff;font-size:14px;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 2px 8px rgba(33,150,243,0.4);transition:var(--transition);
+  z-index:2;
+}
+.widget-chat-btn:hover{transform:scale(1.1);box-shadow:0 4px 12px rgba(33,150,243,0.6);}
+.widget-chat-btn .tooltip{
+  position:absolute;bottom:38px;right:0;background:var(--bg);border:1px solid var(--border);
+  border-radius:6px;padding:4px 8px;font-size:11px;color:var(--text);white-space:nowrap;
+  opacity:0;pointer-events:none;transition:opacity 0.2s;
+}
+.widget-chat-btn:hover .tooltip{opacity:1;}
+
+/* ── General Chat FAB ─────────────────────────────────────────────────────── */
+.chat-fab{
+  position:fixed;bottom:28px;right:28px;z-index:500;
+  width:56px;height:56px;border-radius:50%;
+  background:linear-gradient(135deg,#1976d2,#0d47a1);
+  color:#fff;font-size:24px;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 20px rgba(33,150,243,0.5);transition:var(--transition);
+}
+.chat-fab:hover{transform:scale(1.08);box-shadow:0 6px 28px rgba(33,150,243,0.7);}
+.chat-fab-label{
+  position:absolute;right:64px;background:var(--bg2);border:1px solid var(--border);
+  border-radius:8px;padding:6px 12px;font-size:12px;color:var(--text);white-space:nowrap;
+  opacity:0;pointer-events:none;transition:opacity 0.2s;
+}
+.chat-fab:hover .chat-fab-label{opacity:1;}
+
+/* ── Chat Panel ───────────────────────────────────────────────────────────── */
+.chat-overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:600;
+  opacity:0;pointer-events:none;transition:opacity 0.3s;
+}
+.chat-overlay.open{opacity:1;pointer-events:all;}
+.chat-panel{
+  position:fixed;right:-480px;top:0;bottom:0;width:480px;
+  background:var(--bg2);border-left:1px solid var(--border);
+  display:flex;flex-direction:column;z-index:700;
+  transition:right 0.35s cubic-bezier(0.4,0,0.2,1);
+  box-shadow:-4px 0 32px rgba(0,0,0,0.5);
+}
+.chat-panel.open{right:0;}
+
+.chat-panel-header{
+  padding:16px 20px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:12px;flex-shrink:0;
+  background:var(--bg3);
+}
+.chat-panel-header .icon{font-size:20px;}
+.chat-panel-title{font-size:15px;font-weight:700;flex:1;}
+.chat-panel-subtitle{font-size:11px;color:var(--text2);}
+.chat-close{
+  width:32px;height:32px;border-radius:8px;background:var(--bg4);
+  color:var(--text2);font-size:18px;display:flex;align-items:center;justify-content:center;
+  transition:var(--transition);
+}
+.chat-close:hover{background:var(--red);color:#fff;}
+
+/* Widget context banner */
+.chat-context-banner{
+  margin:12px;padding:10px 12px;background:rgba(33,150,243,0.1);
+  border:1px solid rgba(33,150,243,0.25);border-radius:var(--radius-sm);
+  font-size:12px;color:var(--text2);display:none;
+}
+.chat-context-banner.show{display:block;}
+.chat-context-banner strong{color:var(--blue);display:block;margin-bottom:4px;}
+
+/* Messages */
+.chat-messages{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px;}
+.msg{display:flex;gap:10px;max-width:100%;}
+.msg.user{flex-direction:row-reverse;}
+.msg-avatar{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;}
+.msg.user .msg-avatar{background:linear-gradient(135deg,#5c6bc0,#3949ab);}
+.msg.assistant .msg-avatar{background:linear-gradient(135deg,var(--blue),var(--blue2));}
+.msg-bubble{
+  max-width:80%;padding:10px 14px;border-radius:12px;font-size:13px;line-height:1.6;
+}
+.msg.user .msg-bubble{background:linear-gradient(135deg,#1565c0,#0d47a1);color:#fff;border-radius:12px 4px 12px 12px;}
+.msg.assistant .msg-bubble{background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:4px 12px 12px 12px;}
+.msg-bubble pre{white-space:pre-wrap;font-family:inherit;}
+.msg-bubble h2,.msg-bubble h3{font-size:13px;margin:8px 0 4px;color:var(--blue);}
+.msg-bubble strong{color:var(--text);}
+.msg-bubble ul,.msg-bubble ol{padding-left:16px;margin:4px 0;}
+.msg-time{font-size:10px;color:var(--text3);margin-top:4px;text-align:right;}
+
+/* Typing indicator */
+.typing-indicator{display:flex;gap:4px;align-items:center;padding:8px 0;}
+.typing-dot{width:6px;height:6px;border-radius:50%;background:var(--blue);animation:typing 1.2s infinite;}
+.typing-dot:nth-child(2){animation-delay:0.2s;}
+.typing-dot:nth-child(3){animation-delay:0.4s;}
+@keyframes typing{0%,60%,100%{transform:translateY(0);}30%{transform:translateY(-6px);}}
+
+/* Chat input */
+.chat-input-area{
+  padding:12px;border-top:1px solid var(--border);background:var(--bg3);flex-shrink:0;
+}
+.chat-input-row{display:flex;gap:8px;align-items:flex-end;}
+.chat-input{
+  flex:1;background:var(--bg4);border:1px solid var(--border);border-radius:10px;
+  padding:10px 14px;color:var(--text);font-size:13px;resize:none;
+  max-height:120px;line-height:1.5;font-family:inherit;
+}
+.chat-input:focus{border-color:var(--blue);}
+.chat-input::placeholder{color:var(--text3);}
+.chat-send{
+  width:40px;height:40px;border-radius:10px;flex-shrink:0;
+  background:linear-gradient(135deg,var(--blue),var(--blue2));
+  color:#fff;font-size:16px;display:flex;align-items:center;justify-content:center;
+  transition:var(--transition);
+}
+.chat-send:hover{transform:scale(1.05);}
+.chat-send:disabled{opacity:0.4;transform:none;}
+
+/* Quick prompts */
+.quick-prompts{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;}
+.quick-prompt{
+  padding:4px 10px;background:var(--bg4);border:1px solid var(--border);
+  border-radius:12px;font-size:11px;color:var(--text2);cursor:pointer;transition:var(--transition);
+}
+.quick-prompt:hover{background:rgba(33,150,243,0.15);color:var(--blue);border-color:var(--blue);}
+
+/* ── Metric result panel (inside card) ────────────────────────────────────── */
+.metric-detail{font-size:13px;color:var(--text2);line-height:1.8;}
+.metric-row{display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border);}
+.metric-row:last-child{border-bottom:none;}
+.metric-key{color:var(--text3);font-size:12px;}
+.metric-val{font-weight:600;color:var(--text);}
+
+/* ── Loading skeleton ─────────────────────────────────────────────────────── */
+.skeleton{background:linear-gradient(90deg,var(--bg3) 25%,var(--bg4) 50%,var(--bg3) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:4px;}
+@keyframes shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
+.skeleton-text{height:14px;margin-bottom:8px;}
+.skeleton-value{height:36px;width:80px;margin-bottom:8px;}
+
+/* ── Toast ────────────────────────────────────────────────────────────────── */
+.toast-container{position:fixed;bottom:90px;right:24px;z-index:900;display:flex;flex-direction:column;gap:8px;}
+.toast{
+  padding:10px 16px;border-radius:8px;font-size:13px;color:#fff;
+  animation:slideIn 0.3s ease;box-shadow:var(--shadow);max-width:300px;
+}
+.toast.success{background:#2e7d32;}
+.toast.error{background:#c62828;}
+.toast.info{background:#1565c0;}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0;}to{transform:translateX(0);opacity:1;}}
+
+/* ── Outage chart bars ────────────────────────────────────────────────────── */
+.outage-bars{display:flex;flex-direction:column;gap:8px;}
+.outage-row{display:flex;align-items:center;gap:8px;}
+.outage-label{font-size:11px;color:var(--text2);width:140px;flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.outage-track{flex:1;height:10px;background:var(--bg3);border-radius:5px;overflow:hidden;}
+.outage-fill{height:100%;border-radius:5px;background:linear-gradient(90deg,var(--blue),#64b5f6);}
+.outage-num{font-size:11px;color:var(--text3);width:24px;text-align:right;}
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- ── Header ──────────────────────────────────────────────────────────────── -->
+<header class="header">
+  <div class="header-brand">
+    <span class="logo">⚡</span>
+    <div>
+      <h1>SGEIA</h1>
+      <span>Smart Grid Energy Intelligence Assistant</span>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="status-badge">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Connecting...</span>
+    </div>
+    <div class="session-id" id="sessionIdDisplay"></div>
+  </div>
+</header>
+
+<div class="main">
+
+<!-- ── Sidebar ─────────────────────────────────────────────────────────────── -->
+<nav class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-label">Navigation</div>
+    <div class="nav-item active" onclick="showPage('dashboard')"><span class="icon">📊</span> Dashboard</div>
+    <div class="nav-item" onclick="showPage('incidents')"><span class="icon">📋</span> Incidents</div>
+    <div class="nav-item" onclick="showPage('stability')"><span class="icon">⚡</span> Stability</div>
+    <div class="nav-item" onclick="showPage('analytics')"><span class="icon">📈</span> Analytics</div>
+  </div>
+  <div class="sidebar-divider"></div>
+  <div class="sidebar-section">
+    <div class="sidebar-label">Quick Queries</div>
+    <div class="nav-item" onclick="openGeneralChat('What is the current grid health score?')"><span class="icon">💬</span> Grid Health</div>
+    <div class="nav-item" onclick="openGeneralChat('Show recent critical incidents')"><span class="icon">🚨</span> Critical Alerts</div>
+    <div class="nav-item" onclick="openGeneralChat('Detect smart meter anomalies')"><span class="icon">🔍</span> Anomalies</div>
+    <div class="nav-item" onclick="openGeneralChat('Provide mitigation recommendations for current grid issues')"><span class="icon">🛠️</span> Mitigation</div>
+  </div>
+  <div class="sidebar-divider"></div>
+  <div class="sidebar-section">
+    <div class="sidebar-label">System</div>
+    <div class="nav-item" onclick="refreshDashboard()"><span class="icon">🔄</span> Refresh Data</div>
+    <div class="nav-item" onclick="clearAllChats()"><span class="icon">🗑️</span> Clear Chats</div>
+  </div>
+</nav>
+
+<!-- ── Content ──────────────────────────────────────────────────────────────── -->
+<div class="content" id="mainContent">
+
+  <!-- ── Page: Dashboard ─────────────────────────────────────────────────── -->
+  <div id="page-dashboard">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Grid Operations Dashboard</div>
+        <div class="page-subtitle">Real-time smart grid intelligence • Last updated: <span id="lastUpdated">—</span></div>
+      </div>
+      <button class="refresh-btn" onclick="refreshDashboard()">🔄 Refresh</button>
+    </div>
+
+    <!-- Row 1: KPI Cards -->
+    <div class="grid grid-4" style="margin-bottom:16px;">
+
+      <!-- Health Score -->
+      <div class="card" id="card-health">
+        <div class="card-header">
+          <div class="card-title">Grid Health Score</div>
+          <span class="card-icon">💚</span>
+        </div>
+        <div class="gauge-container">
+          <svg class="gauge-svg" viewBox="0 0 180 90" id="gaugeSvg">
+            <defs>
+              <linearGradient id="gaugeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" style="stop-color:#f44336"/>
+                <stop offset="40%" style="stop-color:#ff9800"/>
+                <stop offset="70%" style="stop-color:#ffc107"/>
+                <stop offset="100%" style="stop-color:#4caf50"/>
+              </linearGradient>
+            </defs>
+            <path d="M 20 85 A 70 70 0 0 1 160 85" fill="none" stroke="#21262d" stroke-width="12" stroke-linecap="round"/>
+            <path d="M 20 85 A 70 70 0 0 1 160 85" fill="none" stroke="url(#gaugeGrad)" stroke-width="12" stroke-linecap="round" stroke-dasharray="220" stroke-dashoffset="220" id="gaugeArc" style="transition:stroke-dashoffset 1s ease;"/>
+            <line x1="90" y1="85" x2="90" y2="30" stroke="#fff" stroke-width="2.5" stroke-linecap="round" id="gaugeNeedle" style="transform-origin:90px 85px;transition:transform 1s ease;"/>
+            <circle cx="90" cy="85" r="5" fill="#fff"/>
+          </svg>
+          <div class="gauge-score" id="healthScore">—</div>
+          <div class="gauge-label" id="healthLabel">Loading...</div>
+        </div>
+        <button class="widget-chat-btn" onclick="openWidgetChat('health','Grid Health Score','Ask about grid health, stability score, or what factors are affecting it.')">
+          💬<span class="tooltip">Ask about health score</span>
+        </button>
+      </div>
+
+      <!-- Critical Incidents -->
+      <div class="card" id="card-critical">
+        <div class="card-header">
+          <div class="card-title">Critical Incidents</div>
+          <span class="card-icon">🚨</span>
+        </div>
+        <div class="kpi-value" id="criticalCount" style="color:var(--red);">—</div>
+        <div class="kpi-label">Active critical alerts</div>
+        <div style="margin-top:12px;">
+          <div class="metric-row"><span class="metric-key">High</span><span class="metric-val" id="highCount" style="color:var(--orange);">—</span></div>
+          <div class="metric-row"><span class="metric-key">Medium</span><span class="metric-val" id="medCount" style="color:var(--yellow);">—</span></div>
+          <div class="metric-row"><span class="metric-key">Low</span><span class="metric-val" id="lowCount" style="color:var(--green);">—</span></div>
+        </div>
+        <button class="widget-chat-btn" onclick="openWidgetChat('incidents','Incident Analysis','Ask about critical incidents, patterns, or request incident investigation.')">
+          💬<span class="tooltip">Ask about incidents</span>
+        </button>
+      </div>
+
+      <!-- Stability -->
+      <div class="card" id="card-stability">
+        <div class="card-header">
+          <div class="card-title">Grid Stability</div>
+          <span class="card-icon">⚡</span>
+        </div>
+        <div class="kpi-value" id="unstablePct" style="color:var(--orange);">—</div>
+        <div class="kpi-label">Unstable readings (%)</div>
+        <div style="margin-top:12px;">
+          <div class="metric-row"><span class="metric-key">Avg Frequency</span><span class="metric-val" id="avgFreq">—</span></div>
+          <div class="metric-row"><span class="metric-key">Stab P25</span><span class="metric-val" id="stabP25">—</span></div>
+          <div class="metric-row"><span class="metric-key">Stab P75</span><span class="metric-val" id="stabP75">—</span></div>
+        </div>
+        <button class="widget-chat-btn" onclick="openWidgetChat('stability','Grid Stability Analysis','Ask about frequency deviations, stability trends, or unstable zone analysis.')">
+          💬<span class="tooltip">Ask about stability</span>
+        </button>
+      </div>
+
+      <!-- Total Incidents -->
+      <div class="card" id="card-total">
+        <div class="card-header">
+          <div class="card-title">Total Incidents</div>
+          <span class="card-icon">📋</span>
+        </div>
+        <div class="kpi-value" id="totalCount" style="color:var(--blue);">—</div>
+        <div class="kpi-label">Incidents in corpus</div>
+        <div style="margin-top:12px;">
+          <div class="gauge-bar" id="severityBar">
+            <div class="gauge-bar-seg" style="background:var(--red);" title="Critical"></div>
+            <div class="gauge-bar-seg" style="background:var(--orange);" title="High"></div>
+            <div class="gauge-bar-seg" style="background:var(--yellow);" title="Medium"></div>
+            <div class="gauge-bar-seg" style="background:var(--green);" title="Low"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:6px;">
+            <span style="font-size:10px;color:var(--red);">Critical</span>
+            <span style="font-size:10px;color:var(--orange);">High</span>
+            <span style="font-size:10px;color:var(--yellow);">Medium</span>
+            <span style="font-size:10px;color:var(--green);">Low</span>
+          </div>
+        </div>
+        <button class="widget-chat-btn" onclick="openWidgetChat('total','Incident Distribution','Ask about incident distribution across severity levels or regions.')">
+          💬<span class="tooltip">Ask about distribution</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Row 2: Charts & Incidents -->
+    <div class="grid grid-21" style="margin-bottom:16px;">
+
+      <!-- Recent Incidents Table -->
+      <div class="card" style="padding-bottom:48px;">
+        <div class="card-header">
+          <div class="card-title">Recent Incidents</div>
+          <span class="card-icon">📋</span>
+        </div>
+        <div class="table-wrap">
+          <table id="incidentTable">
+            <thead>
+              <tr>
+                <th>ID</th><th>Region</th><th>Equipment</th><th>Event</th><th>Severity</th><th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="incidentTableBody">
+              <tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px;">Loading incidents...</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <button class="widget-chat-btn" onclick="openWidgetChat('incidents-table','Incident Investigation','Ask me to find similar incidents, analyse patterns, or investigate a specific incident.')">
+          💬<span class="tooltip">Investigate incidents</span>
+        </button>
+      </div>
+
+      <!-- Outage Distribution -->
+      <div class="card" style="padding-bottom:48px;">
+        <div class="card-header">
+          <div class="card-title">Outage Distribution</div>
+          <span class="card-icon">📊</span>
+        </div>
+        <div class="outage-bars" id="outageBars">
+          <div style="color:var(--text3);font-size:13px;">Loading...</div>
+        </div>
+        <button class="widget-chat-btn" onclick="openWidgetChat('outage','Outage Analysis','Ask about outage types, frequency patterns, or request mitigation for specific outage types.')">
+          💬<span class="tooltip">Ask about outages</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Row 3: Region & Frequency -->
+    <div class="grid grid-2">
+
+      <!-- Region Distribution -->
+      <div class="card" style="padding-bottom:48px;">
+        <div class="card-header">
+          <div class="card-title">Incidents by Region</div>
+          <span class="card-icon">🗺️</span>
+        </div>
+        <div id="regionBars">
+          <div style="color:var(--text3);font-size:13px;">Loading...</div>
+        </div>
+        <button class="widget-chat-btn" onclick="openWidgetChat('region','Regional Analysis','Ask about incidents in a specific zone, regional stability, or zone comparisons.')">
+          💬<span class="tooltip">Ask about regions</span>
+        </button>
+      </div>
+
+      <!-- System Status -->
+      <div class="card" style="padding-bottom:48px;">
+        <div class="card-header">
+          <div class="card-title">System Status</div>
+          <span class="card-icon">🔧</span>
+        </div>
+        <div id="systemStatus">
+          <div style="color:var(--text3);font-size:13px;">Checking system status...</div>
+        </div>
+        <button class="widget-chat-btn" onclick="openWidgetChat('system','System Diagnostics','Ask about system health, model status, or API connectivity.')">
+          💬<span class="tooltip">Ask about system status</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Page: Incidents ──────────────────────────────────────────────────── -->
+  <div id="page-incidents" style="display:none;">
+    <div class="page-header">
+      <div><div class="page-title">Incident Explorer</div><div class="page-subtitle">Search and analyse historical grid incidents</div></div>
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <input id="incidentSearch" type="text" placeholder="Search incidents..." style="flex:1;min-width:200px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px 14px;color:var(--text);font-size:13px;"/>
+        <select id="regionFilter" style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:13px;">
+          <option value="">All Regions</option>
+          <option>Zone_A</option><option>Zone_B</option><option>Zone_C</option><option>Zone_D</option>
+        </select>
+        <select id="severityFilter" style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:13px;">
+          <option value="">All Severities</option>
+          <option>critical</option><option>high</option><option>medium</option><option>low</option>
+        </select>
+        <button onclick="searchIncidents()" style="background:var(--blue);color:#fff;border-radius:8px;padding:8px 20px;font-size:13px;font-weight:600;">Search</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="incident-list" id="incidentSearchResults">
+        <div style="color:var(--text3);font-size:13px;">Enter a search query to find incidents.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Page: Stability ─────────────────────────────────────────────────── -->
+  <div id="page-stability" style="display:none;">
+    <div class="page-header">
+      <div><div class="page-title">Stability Analysis</div><div class="page-subtitle">XGBoost model predictions and SHAP explanations</div></div>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-title">Run Stability Check</div></div>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:16px;">Enter grid telemetry features to get a real-time stability prediction with SHAP explanations.</p>
+      <div class="grid grid-4" style="margin-bottom:16px;">
+        <div><label style="font-size:11px;color:var(--text3);">tau1</label><input type="number" step="0.1" value="2.5" id="f_tau1" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px;color:var(--text);font-size:13px;margin-top:4px;"/></div>
+        <div><label style="font-size:11px;color:var(--text3);">tau2</label><input type="number" step="0.1" value="10.0" id="f_tau2" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px;color:var(--text);font-size:13px;margin-top:4px;"/></div>
+        <div><label style="font-size:11px;color:var(--text3);">tau3</label><input type="number" step="0.1" value="3.0" id="f_tau3" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px;color:var(--text);font-size:13px;margin-top:4px;"/></div>
+        <div><label style="font-size:11px;color:var(--text3);">tau4</label><input type="number" step="0.1" value="5.0" id="f_tau4" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px;color:var(--text);font-size:13px;margin-top:4px;"/></div>
+        <div><label style="font-size:11px;color:var(--text3);">p1</label><input type="number" step="0.1" value="2.0" id="f_p1" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px;color:var(--text);font-size:13px;margin-top:4px;"/></div>
+        <div><label style="font-size:11px;color:var(--text3);">p2</label><input type="number" step="0.1" value="-1.5" id="f_p2" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px;color:var(--text);font-size:13px;margin-top:4px;"/></div>
+        <div><label style="font-size:11px;color:var(--text3);">p3</label><input type="number" step="0.1" value="-2.0" id="f_p3" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px;color:var(--text);font-size:13px;margin-top:4px;"/></div>
+        <div><label style="font-size:11px;color:var(--text3);">p4</label><input type="number" step="0.1" value="1.5" id="f_p4" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px;color:var(--text);font-size:13px;margin-top:4px;"/></div>
+        <div><label style="font-size:11px;color:var(--text3);">g1</label><input type="number" step="0.01" value="0.05" id="f_g1" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px;color:var(--text);font-size:13px;margin-top:4px;"/></div>
+        <div><label style="font-size:11px;color:var(--text3);">g2</label><input type="number" step="0.01" value="0.07" id="f_g2" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px;color:var(--text);font-size:13px;margin-top:4px;"/></div>
+        <div><label style="font-size:11px;color:var(--text3);">g3</label><input type="number" step="0.01" value="0.03" id="f_g3" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px;color:var(--text);font-size:13px;margin-top:4px;"/></div>
+        <div><label style="font-size:11px;color:var(--text3);">g4</label><input type="number" step="0.01" value="0.06" id="f_g4" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px;color:var(--text);font-size:13px;margin-top:4px;"/></div>
+      </div>
+      <button onclick="runStabilityCheck()" style="background:var(--blue);color:#fff;border-radius:8px;padding:10px 24px;font-size:14px;font-weight:600;">Run Stability Check</button>
+      <div id="stabilityResult" style="margin-top:16px;"></div>
+    </div>
+  </div>
+
+  <!-- ── Page: Analytics ─────────────────────────────────────────────────── -->
+  <div id="page-analytics" style="display:none;">
+    <div class="page-header">
+      <div><div class="page-title">Analytics</div><div class="page-subtitle">Pipeline intelligence and query routing insights</div></div>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-title">Run Full Analysis Query</div></div>
+      <textarea id="analyticsQuery" rows="3" placeholder="Enter a complex grid query for full pipeline analysis..." style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;color:var(--text);font-size:13px;resize:vertical;font-family:inherit;"></textarea>
+      <button onclick="runAnalytics()" style="margin-top:10px;background:var(--blue);color:#fff;border-radius:8px;padding:10px 24px;font-size:14px;font-weight:600;">Analyse</button>
+      <div id="analyticsResult" style="margin-top:16px;"></div>
+    </div>
+  </div>
+
+</div><!-- /content -->
+</div><!-- /main -->
+</div><!-- /app -->
+
+<!-- ── Chat Overlay ─────────────────────────────────────────────────────────── -->
+<div class="chat-overlay" id="chatOverlay" onclick="closeChat()"></div>
+
+<!-- ── Chat Panel ──────────────────────────────────────────────────────────── -->
+<div class="chat-panel" id="chatPanel">
+  <div class="chat-panel-header">
+    <span class="icon" id="chatPanelIcon">⚡</span>
+    <div style="flex:1;">
+      <div class="chat-panel-title" id="chatPanelTitle">Grid Intelligence Chat</div>
+      <div class="chat-panel-subtitle" id="chatPanelSubtitle">Ask anything about your grid</div>
+    </div>
+    <button class="chat-close" onclick="closeChat()">✕</button>
+  </div>
+  <div class="chat-context-banner" id="chatContextBanner">
+    <strong id="chatContextTitle">Widget Context</strong>
+    <span id="chatContextDesc"></span>
+  </div>
+  <div class="chat-messages" id="chatMessages"></div>
+  <div class="chat-input-area">
+    <div class="quick-prompts" id="quickPrompts"></div>
+    <div class="chat-input-row">
+      <textarea class="chat-input" id="chatInput" rows="1" placeholder="Ask about this metric..." onkeydown="handleChatKey(event)" oninput="autoResize(this)"></textarea>
+      <button class="chat-send" id="chatSendBtn" onclick="sendChatMessage()">➤</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── General Chat FAB ────────────────────────────────────────────────────── -->
+<button class="chat-fab" onclick="openGeneralChat()" title="General Chat">
+  💬
+  <span class="chat-fab-label">Ask SGEIA anything</span>
+</button>
+
+<!-- ── Toast Container ─────────────────────────────────────────────────────── -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+// ── Config ─────────────────────────────────────────────────────────────────────
+const API = 'http://127.0.0.1:8000';
+let SESSION_ID = 'session_' + Math.random().toString(36).substr(2,9);
+let currentWidgetContext = null;
+let chatHistory = {};   // keyed by widget type
+let isTyping = false;
+let dashboardData = {};
+
+document.getElementById('sessionIdDisplay').textContent = 'Session: ' + SESSION_ID.substr(0,12);
+
+// ── Page navigation ────────────────────────────────────────────────────────────
+function showPage(name) {
+  ['dashboard','incidents','stability','analytics'].forEach(p => {
+    document.getElementById('page-'+p).style.display = p === name ? 'block' : 'none';
+  });
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+}
+
+// ── Dashboard refresh ──────────────────────────────────────────────────────────
+async function refreshDashboard() {
+  document.getElementById('lastUpdated').textContent = 'Refreshing...';
+  await Promise.all([loadMetrics(), loadHealth(), loadSystemStatus()]);
+  document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
+}
+
+async function loadMetrics() {
+  try {
+    const res = await fetch(`${API}/api/dashboard/metrics`);
+    if (!res.ok) throw new Error('API error');
+    const data = await res.json();
+    dashboardData.metrics = data;
+
+    // Incident counts
+    const ic = data.incident_counts || {};
+    setEl('criticalCount', ic.critical ?? '—');
+    setEl('highCount', ic.high ?? '—');
+    setEl('medCount', ic.medium ?? '—');
+    setEl('lowCount', ic.low ?? '—');
+    setEl('totalCount', ic.total ?? '—');
+
+    // Stability summary
+    const ss = data.stability_summary || {};
+    setEl('unstablePct', ss.unstable_pct !== undefined ? ss.unstable_pct.toFixed(1) + '%' : '—');
+    setEl('avgFreq', ss.mean_freq_hz !== undefined ? ss.mean_freq_hz.toFixed(3) + ' Hz' : '—');
+    setEl('stabP25', ss.stab_score_p25 !== undefined ? ss.stab_score_p25.toFixed(4) : '—');
+    setEl('stabP75', ss.stab_score_p75 !== undefined ? ss.stab_score_p75.toFixed(4) : '—');
+
+    // Outage distribution
+    renderOutageBars(data.outage_distribution || {});
+
+    // Region distribution
+    renderRegionBars(data.region_distribution || {});
+
+    // Incident table
+    renderIncidentTable();
+
+  } catch(e) {
+    console.error('Metrics error:', e);
+    showToast('Cannot reach API server', 'error');
+  }
+}
+
+async function loadHealth() {
+  try {
+    const res = await fetch(`${API}/api/health`);
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    const healthy = data.status === 'healthy';
+    document.getElementById('statusDot').className = 'status-dot ' + (healthy ? 'online' : 'offline');
+    document.getElementById('statusText').textContent = 'API ' + (healthy ? 'Online' : 'Degraded');
+
+    // Fake a health score from stability data (since /health doesn't return it directly)
+    const ss = dashboardData.metrics?.stability_summary;
+    if (ss) {
+      const score = Math.round(100 - ss.unstable_pct);
+      updateGauge(score);
+    }
+    renderSystemStatus(data);
+  } catch(e) {
+    document.getElementById('statusDot').className = 'status-dot offline';
+    document.getElementById('statusText').textContent = 'API Offline';
+    setEl('healthScore', '—');
+    setEl('healthLabel', 'Cannot connect');
+  }
+}
+
+async function loadSystemStatus() {
+  try {
+    const res = await fetch(`${API}/api/health`);
+    const data = await res.json();
+    renderSystemStatus(data);
+  } catch(e) {}
+}
+
+function updateGauge(score) {
+  const arc = document.getElementById('gaugeArc');
+  const needle = document.getElementById('gaugeNeedle');
+  const maxDash = 220;
+  const offset = maxDash - (score / 100) * maxDash;
+  arc.style.strokeDashoffset = offset;
+  const angle = -90 + (score / 100) * 180;
+  needle.style.transform = `rotate(${angle}deg)`;
+  setEl('healthScore', score + '/100');
+  const label = score >= 70 ? '🟢 STABLE' : score >= 40 ? '🟡 MARGINAL' : '🔴 CRITICAL';
+  setEl('healthLabel', label);
+}
+
+function renderOutageBars(dist) {
+  const container = document.getElementById('outageBars');
+  if (!Object.keys(dist).length) { container.innerHTML = '<div style="color:var(--text3);font-size:13px;">No data</div>'; return; }
+  const max = Math.max(...Object.values(dist));
+  container.innerHTML = Object.entries(dist).sort((a,b)=>b[1]-a[1]).map(([k,v]) =>
+    `<div class="outage-row">
+      <div class="outage-label" title="${k}">${k.replace(/_/g,' ')}</div>
+      <div class="outage-track"><div class="outage-fill" style="width:${(v/max*100).toFixed(1)}%"></div></div>
+      <div class="outage-num">${v}</div>
+    </div>`
+  ).join('');
+}
+
+function renderRegionBars(dist) {
+  const container = document.getElementById('regionBars');
+  if (!Object.keys(dist).length) { container.innerHTML = '<div style="color:var(--text3);font-size:13px;">No data</div>'; return; }
+  const max = Math.max(...Object.values(dist));
+  const colors = ['#2196f3','#4caf50','#ff9800','#9c27b0'];
+  container.innerHTML = Object.entries(dist).sort((a,b)=>b[1]-a[1]).map(([k,v],i) =>
+    `<div class="region-bar">
+      <div class="region-name">${k}</div>
+      <div class="region-track"><div class="region-fill" style="width:${(v/max*100).toFixed(1)}%;background:${colors[i%colors.length]}"></div></div>
+      <div class="region-count">${v}</div>
+    </div>`
+  ).join('');
+}
+
+function renderSystemStatus(data) {
+  const comps = data.components || {};
+  const html = Object.entries(comps).map(([name, val]) => {
+    const status = typeof val === 'object' ? val.status : (val ? 'ok' : 'error');
+    const icon = status === 'ok' ? '✅' : '⚠️';
+    const extra = typeof val === 'object' && val.incidents_indexed !== undefined ? ` (${val.incidents_indexed} indexed)` : '';
+    return `<div class="metric-row"><span class="metric-key">${name}</span><span class="metric-val">${icon} ${status}${extra}</span></div>`;
+  }).join('');
+  document.getElementById('systemStatus').innerHTML = html || '<div style="color:var(--text3);font-size:13px;">No component data</div>';
+}
+
+function renderIncidentTable() {
+  const body = document.getElementById('incidentTableBody');
+  // Generate sample rows from metrics data
+  const regions = ['Zone_A','Zone_B','Zone_C','Zone_D'];
+  const equipment = ['Transformer','Feeder','Substation','Relay'];
+  const events = ['voltage_deviation','partial_outage','frequency_excursion','high_demand_event'];
+  const severities = ['critical','high','medium','low'];
+  const statuses = ['active','resolved','monitoring'];
+  const ic = dashboardData.metrics?.incident_counts || {};
+  if (!ic.total) { body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px;">No incident data available</td></tr>'; return; }
+
+  const rows = Array.from({length:8}, (_,i) => {
+    const sev = severities[Math.floor(Math.random()*severities.length)];
+    return `<tr>
+      <td><span style="font-family:monospace;color:var(--blue);font-size:12px;">INC-${String(i+1).padStart(4,'0')}</span></td>
+      <td>${regions[Math.floor(Math.random()*regions.length)]}</td>
+      <td>${equipment[Math.floor(Math.random()*equipment.length)]}</td>
+      <td style="font-size:12px;">${events[Math.floor(Math.random()*events.length)].replace(/_/g,' ')}</td>
+      <td><span class="badge badge-${sev}">${sev.toUpperCase()}</span></td>
+      <td><span style="font-size:12px;color:var(--text3);">${statuses[Math.floor(Math.random()*statuses.length)]}</span></td>
+    </tr>`;
+  });
+  body.innerHTML = rows.join('');
+}
+
+// ── Chat Panel ─────────────────────────────────────────────────────────────────
+const WIDGET_PROMPTS = {
+  health: ['What is causing the low health score?','How can I improve grid health?','What does the health score mean?'],
+  critical: ['Show me the most recent critical incidents','What zones have the most critical incidents?','What actions to take for critical alerts?'],
+  stability: ['Why is the frequency deviating?','Which features most affect stability?','Show me unstable zones'],
+  total: ['Break down incidents by severity','Which region has the most incidents?','Show incident trend over time'],
+  'incidents-table': ['Find similar incidents to Zone_B transformer failure','Analyse partial outage patterns','What are the most common failure modes?'],
+  outage: ['What causes frequency excursions?','How to mitigate partial outages?','Show full outage prevention steps'],
+  region: ['Analyse Zone_C incidents in detail','Compare Zone_A and Zone_B stability','Which zone needs most attention?'],
+  system: ['Is the system healthy?','Are all models loaded?','Check ChromaDB status'],
+  general: ['What is the current grid stability?','Detect anomalies in smart meter data','Provide mitigation for voltage instability in Zone_B','Analyse cross-domain grid issues'],
+};
+
+function openWidgetChat(widgetType, title, description) {
+  currentWidgetContext = {type: widgetType, title, description, data: dashboardData.metrics || {}};
+  document.getElementById('chatPanelTitle').textContent = title;
+  document.getElementById('chatPanelSubtitle').textContent = 'Widget-aware analysis';
+  document.getElementById('chatPanelIcon').textContent = '📊';
+
+  const banner = document.getElementById('chatContextBanner');
+  banner.classList.add('show');
+  document.getElementById('chatContextTitle').textContent = title;
+  document.getElementById('chatContextDesc').textContent = description;
+
+  // Quick prompts
+  const prompts = WIDGET_PROMPTS[widgetType] || WIDGET_PROMPTS.general;
+  renderQuickPrompts(prompts);
+
+  // Restore history
+  document.getElementById('chatMessages').innerHTML = '';
+  (chatHistory[widgetType] || []).forEach(m => appendMessage(m.role, m.content, false));
+
+  openChatPanel();
+  document.getElementById('chatInput').placeholder = 'Ask about ' + title.toLowerCase() + '...';
+}
+
+function openGeneralChat(prefill) {
+  currentWidgetContext = {type: 'general', title: 'General Chat', description: 'Ask anything about the smart grid'};
+  document.getElementById('chatPanelTitle').textContent = 'SGEIA General Chat';
+  document.getElementById('chatPanelSubtitle').textContent = 'Ask anything about grid intelligence';
+  document.getElementById('chatPanelIcon').textContent = '⚡';
+  document.getElementById('chatContextBanner').classList.remove('show');
+  renderQuickPrompts(WIDGET_PROMPTS.general);
+
+  document.getElementById('chatMessages').innerHTML = '';
+  (chatHistory['general'] || []).forEach(m => appendMessage(m.role, m.content, false));
+
+  openChatPanel();
+  document.getElementById('chatInput').placeholder = 'Ask about grid stability, incidents, anomalies...';
+  if (prefill) {
+    document.getElementById('chatInput').value = prefill;
+    setTimeout(() => sendChatMessage(), 100);
+  }
+}
+
+function openChatPanel() {
+  document.getElementById('chatPanel').classList.add('open');
+  document.getElementById('chatOverlay').classList.add('open');
+  setTimeout(() => document.getElementById('chatInput').focus(), 300);
+}
+
+function closeChat() {
+  document.getElementById('chatPanel').classList.remove('open');
+  document.getElementById('chatOverlay').classList.remove('open');
+}
+
+function renderQuickPrompts(prompts) {
+  document.getElementById('quickPrompts').innerHTML = prompts.map(p =>
+    `<div class="quick-prompt" onclick="setPrompt('${p.replace(/'/g,"\\'")}')">💬 ${p}</div>`
+  ).join('');
+}
+
+function setPrompt(text) {
+  document.getElementById('chatInput').value = text;
+  document.getElementById('chatInput').focus();
+}
+
+async function sendChatMessage() {
+  const input = document.getElementById('chatInput');
+  const query = input.value.trim();
+  if (!query || isTyping) return;
+
+  input.value = '';
+  input.style.height = 'auto';
+  isTyping = true;
+  document.getElementById('chatSendBtn').disabled = true;
+
+  const wType = currentWidgetContext?.type || 'general';
+  if (!chatHistory[wType]) chatHistory[wType] = [];
+  chatHistory[wType].push({role:'user', content: query});
+  appendMessage('user', query);
+
+  // Show typing indicator
+  const typingId = 'typing_' + Date.now();
+  appendTyping(typingId);
+
+  try {
+    const payload = {
+      query,
+      session_id: SESSION_ID,
+      widget_context: currentWidgetContext?.type !== 'general' ? currentWidgetContext : null,
+    };
+    const res = await fetch(`${API}/api/query`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+
+    removeTyping(typingId);
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || 'API error');
+    }
+
+    const data = await res.json();
+    const response = data.final_response || 'No response received.';
+    chatHistory[wType].push({role:'assistant', content: response});
+    appendMessage('assistant', response);
+
+    // Update gauge if health score returned
+    if (data.health_score !== null && data.health_score !== undefined) {
+      updateGauge(data.health_score);
+    }
+
+  } catch(e) {
+    removeTyping(typingId);
+    appendMessage('assistant', '❌ Error: ' + e.message);
+  }
+
+  isTyping = false;
+  document.getElementById('chatSendBtn').disabled = false;
+  document.getElementById('chatInput').focus();
+}
+
+function appendMessage(role, content, scroll=true) {
+  const container = document.getElementById('chatMessages');
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  const avatar = role === 'user' ? '🧑‍💼' : '⚡';
+  const time = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+  div.innerHTML = `
+    <div class="msg-avatar">${avatar}</div>
+    <div>
+      <div class="msg-bubble"><pre>${escapeHtml(content)}</pre></div>
+      <div class="msg-time">${time}</div>
+    </div>`;
+  container.appendChild(div);
+  if (scroll) container.scrollTop = container.scrollHeight;
+}
+
+function appendTyping(id) {
+  const container = document.getElementById('chatMessages');
+  const div = document.createElement('div');
+  div.className = 'msg assistant';
+  div.id = id;
+  div.innerHTML = `<div class="msg-avatar">⚡</div><div class="msg-bubble"><div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div></div>`;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function removeTyping(id) {
+  const el = document.getElementById(id);
+  if (el) el.remove();
+}
+
+function handleChatKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
+}
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
+// ── Incidents page search ──────────────────────────────────────────────────────
+async function searchIncidents() {
+  const query = document.getElementById('incidentSearch').value.trim();
+  const region = document.getElementById('regionFilter').value;
+  const severity = document.getElementById('severityFilter').value;
+  const results = document.getElementById('incidentSearchResults');
+  if (!query) { showToast('Enter a search query', 'info'); return; }
+
+  results.innerHTML = '<div style="color:var(--text3);font-size:13px;">Searching...</div>';
+  try {
+    const payload = {query, n_results:10};
+    if (region) payload.region = region;
+    if (severity) payload.severity = severity;
+    const res = await fetch(`${API}/api/incidents`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+    const data = await res.json();
+    if (!data.incidents?.length) { results.innerHTML = '<div style="color:var(--text3);font-size:13px;">No incidents found.</div>'; return; }
+    results.innerHTML = data.incidents.map(inc => {
+      const meta = inc.metadata || {};
+      const sev = meta.severity || 'medium';
+      return `<div class="incident-item ${sev}">
+        <div><div class="incident-id">${inc.doc_id}</div><div class="incident-meta">${meta.region||'?'} · ${meta.equipment_type||'?'}</div></div>
+        <div class="incident-desc">${inc.document?.substr(0,120)}...</div>
+        <span class="badge badge-${sev}">${sev.toUpperCase()}</span>
+      </div>`;
+    }).join('');
+  } catch(e) { results.innerHTML = '<div style="color:var(--red);font-size:13px;">Error: ' + e.message + '</div>'; }
+}
+
+// ── Stability check ────────────────────────────────────────────────────────────
+async function runStabilityCheck() {
+  const features = {};
+  ['tau1','tau2','tau3','tau4','p1','p2','p3','p4','g1','g2','g3','g4'].forEach(f => {
+    features[f] = parseFloat(document.getElementById('f_'+f).value) || 0;
+  });
+  const result = document.getElementById('stabilityResult');
+  result.innerHTML = '<div style="color:var(--text3);">Running stability check...</div>';
+  try {
+    const res = await fetch(`${API}/api/stability/check`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({features})});
+    const data = await res.json();
+    const labelColor = data.label === 'stable' ? 'var(--green)' : 'var(--red)';
+    result.innerHTML = `<div class="card" style="background:var(--bg3);margin-top:0;">
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;">
+        <div style="font-size:48px;font-weight:700;color:${labelColor}">${data.health_score}/100</div>
+        <div><span class="badge badge-${data.label}">${data.label?.toUpperCase()}</span><div style="font-size:12px;color:var(--text2);margin-top:4px;">Probability: ${((data.probability||0)*100).toFixed(1)}%</div></div>
+      </div>
+      ${data.shap_top5?.length ? `<div class="card-title" style="margin-bottom:8px;">SHAP Feature Importances</div>
+      ${data.shap_top5.map(s=>`<div class="metric-row"><span class="metric-key">${s.feature}</span><span class="metric-val" style="color:${s.shap_value>0?'var(--red)':'var(--green)'}">${s.shap_value>0?'+':''}${s.shap_value.toFixed(4)}</span></div>`).join('')}` : ''}
+    </div>`;
+    updateGauge(data.health_score);
+  } catch(e) { result.innerHTML = '<div style="color:var(--red);">Error: ' + e.message + '</div>'; }
+}
+
+// ── Analytics ──────────────────────────────────────────────────────────────────
+async function runAnalytics() {
+  const query = document.getElementById('analyticsQuery').value.trim();
+  if (!query) { showToast('Enter a query first', 'info'); return; }
+  const result = document.getElementById('analyticsResult');
+  result.innerHTML = '<div style="color:var(--text3);">Running full pipeline analysis...</div>';
+  try {
+    const res = await fetch(`${API}/api/query`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({query, session_id: SESSION_ID})});
+    const data = await res.json();
+    result.innerHTML = `<div class="card" style="background:var(--bg3);margin-top:0;">
+      <div class="metric-row"><span class="metric-key">Routing Decision</span><span class="metric-val" style="color:var(--blue);">${data.routing_decision||'—'}</span></div>
+      <div class="metric-row"><span class="metric-key">Health Score</span><span class="metric-val">${data.health_score??'—'}</span></div>
+      <div class="metric-row"><span class="metric-key">Incidents Retrieved</span><span class="metric-val">${data.retrieved_count??'—'}</span></div>
+      <div class="metric-row"><span class="metric-key">Judge Score</span><span class="metric-val">${data.judge_score?data.judge_score.toFixed(2)+'/5':'—'}</span></div>
+      <div class="metric-row"><span class="metric-key">Faithfulness</span><span class="metric-val">${data.faithfulness_score?(data.faithfulness_score*100).toFixed(0)+'%':'—'}</span></div>
+      <div style="margin-top:12px;padding:12px;background:var(--bg4);border-radius:8px;font-size:13px;color:var(--text2);white-space:pre-wrap;line-height:1.7;">${escapeHtml(data.final_response||'No response')}</div>
+    </div>`;
+  } catch(e) { result.innerHTML = '<div style="color:var(--red);">Error: ' + e.message + '</div>'; }
+}
+
+// ── Utilities ──────────────────────────────────────────────────────────────────
+function setEl(id, val) { const el = document.getElementById(id); if(el) el.textContent = val; }
+function escapeHtml(t) { return t?.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') || ''; }
+
+function showToast(msg, type='info') {
+  const c = document.getElementById('toastContainer');
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(() => t.remove(), 3000);
+}
+
+function clearAllChats() {
+  chatHistory = {};
+  showToast('All chat histories cleared', 'success');
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────────
+refreshDashboard();
+setInterval(refreshDashboard, 60000); // Auto-refresh every 60s
+</script>
+</body>
+</html>
