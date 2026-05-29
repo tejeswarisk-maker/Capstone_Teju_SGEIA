@@ -184,7 +184,7 @@ Be specific, technical, and actionable. Reference actual numbers from the data.
 Keep responses under 250 words unless more detail is requested."""
 
     try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
+        async with httpx.AsyncClient(timeout=45.0, verify=False) as client:
             resp = await client.post(
                 f"{settings.openai_base_url}/chat/completions",
                 headers={
