@@ -167,16 +167,20 @@ async def fast_chat(request: ChatRequest):
     widget_desc  = widget_ctx.get("description", "")
     metrics_json = json.dumps(widget_ctx.get("metrics", {}), default=str)[:800]
 
+    is_general = widget_ctx.get("type") == "general"
     system_prompt = f"""You are SGEIA — Smart Grid Energy Intelligence Assistant.
 You are an expert in power grid operations, stability analysis, incident management, and energy systems.
 
-{'Widget context: ' + widget_title + ' — ' + widget_desc if widget_desc else ''}
-{'Dashboard metrics snapshot: ' + metrics_json if widget_ctx.get('metrics') else ''}
+{'=== FULL DASHBOARD SNAPSHOT (all 12 widgets) ===' if is_general else '=== WIDGET CONTEXT: ' + widget_title + ' ==='}
+{widget_desc}
 
-Answer the user question clearly and concisely. Be specific, technical, and actionable.
-If the question is about grid data, reference the metrics provided.
-If asked about incidents, stability, anomalies or recommendations — give expert operational guidance.
-Keep responses focused and under 200 words unless detail is specifically requested."""
+Dashboard data:
+{metrics_json}
+
+{'You have visibility across ALL widgets — grid health, active incidents, zone status, stability trend, frequency, voltage, demand, equipment, anomaly feed, agent activity, and recommendations. Answer cross-widget questions by comparing and correlating this data.' if is_general else 'Answer questions specifically about this widget using the data above.'}
+
+Be specific, technical, and actionable. Reference actual numbers from the data.
+Keep responses under 250 words unless more detail is requested."""
 
     try:
         from langchain_core.messages import HumanMessage, SystemMessage

@@ -442,7 +442,7 @@ button{cursor:pointer;font-family:inherit}
 </main>
 
 <!-- FAB -->
-<button class="fab" onclick="openChat('general','General Chat','Ask anything about the Smart Grid Energy Intelligence system — pipeline status, incident patterns, stability analysis, or operational guidance. No widget context required.')">
+<button class="fab" onclick="openGeneralChat()">
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
   <div class="fab-dot"></div>
 </button>
@@ -812,15 +812,57 @@ function renderRecommendations(){
   ).join('');
 }
 
+// ── Build full dashboard snapshot for cross-widget queries ─────────────────
+function buildDashboardSnapshot() {
+  const ic = dash.incident_counts || {};
+  const ss = dash.stability_summary || {};
+  const rd = dash.region_distribution || {};
+  const od = dash.outage_distribution || {};
+  const health = Math.round(100 - (ss.unstable_pct ?? 18.3));
+  const zones = ['Zone_A','Zone_B','Zone_C','Zone_D'];
+  const total = ic.total || 1;
+  const zoneScores = zones.reduce((acc,z) => {
+    const pct = ((rd[z]||0)/total)*100;
+    const s = Object.keys(rd).length ? Math.round(Math.max(20,Math.min(99,100-pct*2.8))) : {Zone_A:86,Zone_B:54,Zone_C:38,Zone_D:79}[z];
+    acc[z] = { score: s, status: s>=70?'Stable':s>=40?'Watch':'Unstable', incidents: rd[z]||0 };
+    return acc;
+  }, {});
+  return {
+    grid_health_score: health,
+    health_status: health>=70?'Stable':health>=40?'Watch':'Critical',
+    active_incidents: { critical: ic.critical||0, high: ic.high||0, medium: ic.medium||0, low: ic.low||0, total: ic.total||0 },
+    zone_status: zoneScores,
+    grid_frequency_hz: ss.mean_freq_hz ?? 49.92,
+    stability: { unstable_pct: ss.unstable_pct??18.3, stab_p25: ss.stab_score_p25??-0.02, stab_p75: ss.stab_score_p75??0.06 },
+    outage_distribution: od,
+    equipment_status: { transformer:{total:48,healthy:41,warn:5,crit:2}, substation:{total:12,healthy:11,warn:1,crit:0}, distribution_unit:{total:96,healthy:84,warn:9,crit:3}, smart_meter_bank:{total:320,healthy:308,warn:10,crit:2} },
+    recent_anomalies: ['AN-2041 Zone_C HIGH: Sudden 42% consumption drop on bank SM-C12','AN-2040 Zone_B MEDIUM: Reverse-power flow detected','AN-2039 Zone_C CRITICAL: Autoencoder reconstruction error 4.6σ'],
+    recent_recommendations: ['INC-001423 CRITICAL 91%: Shed 12% non-critical load on Zone_C feeder F-7','INC-001417 HIGH 84%: Reconfigure transformer T-22 tap position to +2','INC-001411 MEDIUM 62%: Curtail PV injection from solar farm SF-D2 by 15%'],
+    agents_online: 5,
+  };
+}
+
+function openGeneralChat() {
+  const snapshot = buildDashboardSnapshot();
+  const desc = `Full dashboard context attached. Grid Health: ${snapshot.grid_health_score}/100 (${snapshot.health_status}). `
+    + `Incidents: ${snapshot.active_incidents.critical} Critical, ${snapshot.active_incidents.high} High, ${snapshot.active_incidents.medium} Medium, ${snapshot.active_incidents.low} Low. `
+    + `Zones: Zone_A=${snapshot.zone_status.Zone_A.score} ${snapshot.zone_status.Zone_A.status}, Zone_B=${snapshot.zone_status.Zone_B.score} ${snapshot.zone_status.Zone_B.status}, Zone_C=${snapshot.zone_status.Zone_C.score} ${snapshot.zone_status.Zone_C.status}, Zone_D=${snapshot.zone_status.Zone_D.score} ${snapshot.zone_status.Zone_D.status}. `
+    + `Frequency: ${snapshot.grid_frequency_hz} Hz. Ask anything across all widgets — compare zones, correlate incidents with stability, or get an overall grid assessment.`;
+  openChat('general', 'General Chat — All Widgets', desc, snapshot);
+}
+
 // ── Chat system ────────────────────────────────────────────────────────────
-function openChat(type,title,desc){
-  curWidget={type,title,desc};
+function openChat(type,title,desc,extraMetrics){
+  curWidget={type,title,desc,extraMetrics};
   $('chat-title').textContent=title;
   $('chat-subtitle').textContent='Context: '+title;
   $('ctx-pill').textContent='Context: '+title;
   $('ctx-desc').textContent=desc;
-  $('empty-lbl').textContent='Ask about '+title+'. Context is attached automatically.';
-  $('chat-inp').placeholder='Ask about '+title+'…';
+  const ph = type==='general' ? 'Compare zones, incidents, stability… ask anything.' : 'Ask about '+title+'…';
+  $('empty-lbl').textContent= type==='general'
+    ? 'Ask anything across all 12 widgets. Full dashboard context is attached.'
+    : 'Ask about '+title+'. Context is attached automatically.';
+  $('chat-inp').placeholder=ph;
   if(!threads[type])threads[type]=[];
   renderMsgs(threads[type]);
   renderThreadList();
@@ -868,7 +910,12 @@ async function sendMsg(){
   dot.innerHTML='<div class="msg-bbl"><div class="typing"><span></span><span></span><span></span></div></div>';
   box.appendChild(dot);box.scrollTop=box.scrollHeight;
 
-  const ctx=curWidget?{type:curWidget.type,title:curWidget.title,description:curWidget.desc,metrics:dash}:null;
+  const ctx=curWidget?{
+    type:curWidget.type,
+    title:curWidget.title,
+    description:curWidget.desc,
+    metrics: curWidget.extraMetrics || dash,  // general chat gets full snapshot
+  }:null;
   try{
     const res=await fetch(`${API}/api/chat/fast`,{
       method:'POST',headers:{'Content-Type':'application/json'},
