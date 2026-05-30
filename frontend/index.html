@@ -923,6 +923,166 @@ function _localAnswer(query, widgetType){
   const freqOk=freq>=49.8&&freq<=50.2;
   const total=ic.total||0;
 
+  // ── ANALYTICAL questions — checked FIRST before any widget-specific patterns ─
+  // "why", "what is causing", "explain", "how does" etc. always get full analysis
+  const isWhy     = /\bwhy\b|caus|reason|explain|because|due to|responsib|trigger/i.test(q);
+  const isAnalyse = /analys|investigat|diagnos|assess|evaluat|tell me more|what.*happen|elaborate/i.test(q);
+  const isAction  = /should.*do|what.*action|mitigat|recommend|next step|priorit|fix|resolve|address/i.test(q);
+  const isRisk    = /\brisk\b|danger|threat|concern|impact|affect|consequence/i.test(q);
+  const isCompare = /compar|vs\b|versus|differ|between|which.*better|which.*worse|rank/i.test(q);
+  const isHow     = /\bhow\b.*(does|do|is|are|work|calculat|comput)/i.test(q);
+
+  if(isWhy || isAnalyse || isAction || isRisk || isCompare || isHow){
+    const unstPct   = +(ss.unstable_pct??63.8).toFixed(1);
+    const critPct   = (((ic.critical||0)/(ic.total||1))*100).toFixed(1);
+    const topOutage = Object.entries(od).sort((a,b)=>b[1]-a[1])[0]||['unknown',0];
+    const zTotInc   = Object.values(rd).reduce((a,b)=>a+b,0)||1;
+    const zScore    = z=>{ const s=(rd[z]||0)/zTotInc; return Math.max(10,Math.min(100,Math.round(health*(1-s*0.4)))); };
+    const worstZone = Object.entries(rd).sort((a,b)=>b[1]-a[1])[0]||['Zone_A',0];
+
+    // WHY health is low / WHY score is low / unstable telemetry
+    if(/health.*low|score.*low|why.*low|why.*critical|why.*score|why.*health|unstable.*telemet|telemet.*unstable|why.*unstable|low.*score|low.*health/i.test(q)){
+      return `**Root Cause Analysis — Why Grid Health is ${health}/100 (Critical 🔴)**
+
+The XGBoost stability classifier ran on DS1 telemetry (τ1–τ4 time constants, P1–P4 power inputs, G1–G4 gamma coefficients) and flagged **${unstPct}% of all readings as unstable** — directly setting health = 100 − ${unstPct} = **${health}**.
+
+**Key contributing factors:**
+
+1. **High critical incident load** — ${ic.critical||0} critical incidents (${critPct}% of ${ic.total||0} total) indicate active full-outage events stressing the grid across multiple zones
+
+2. **Dominant failure mode: "${topOutage[0].replace(/_/g,' ')}"** — ${topOutage[1]} incidents of this type alone account for ${((topOutage[1]/(ic.total||1))*100).toFixed(1)}% of all failures. This is the single largest driver of instability.
+
+3. **Zone concentration** — **${worstZone[0]}** carries ${worstZone[1]} incidents (${((worstZone[1]/zTotInc)*100).toFixed(1)}% of all incidents), creating localised instability that propagates through interconnected feeders
+
+4. **High + medium severity backlog** — ${ic.high||0} High + ${ic.medium||0} Medium incidents add further stress even if not yet full outages
+
+5. **Frequency: ${freq} Hz** — ${freqOk?'Currently within safe band (49.8–50.2 Hz), but with this many incidents, drift is a risk':'⚠️ OUTSIDE safe band — Automatic Frequency Control has engaged, adding regulatory burden'}
+
+**What to do:** Prioritise resolving critical incidents in ${worstZone[0]}, investigate the "${topOutage[0].replace(/_/g,' ')}" root cause, and verify feeder relay settings in affected zones.`;
+    }
+
+    // WHAT IS CAUSING incidents / outages
+    if(/what.*caus|caus.*incident|caus.*outage|why.*incident|why.*outage|reason.*incident/i.test(q)){
+      const sorted=Object.entries(od).sort((a,b)=>b[1]-a[1]).slice(0,4);
+      return `**Incident Causation Analysis — ${ic.total||0} Active Incidents**
+
+**Severity breakdown:**
+• 🔴 Critical (${ic.critical||0}, ${critPct}%): Full outage events — complete supply loss in affected areas
+• 🟠 High (${ic.high||0}, ${(((ic.high||0)/(ic.total||1))*100).toFixed(1)}%): Frequency excursions + partial outages
+• 🔵 Medium (${ic.medium||0}, ${(((ic.medium||0)/(ic.total||1))*100).toFixed(1)}%): Voltage deviations + high demand stress
+• ⚪ Low (${ic.low||0}, ${(((ic.low||0)/(ic.total||1))*100).toFixed(1)}%): Renewable variability, self-correcting events
+
+**Top failure categories:**
+${sorted.map(([k,v],i)=>`${i+1}. **${k.replace(/_/g,' ')}** — ${v} incidents (${((v/(ic.total||1))*100).toFixed(1)}%)`).join('\n')}
+
+**Zone distribution (highest → lowest):**
+${Object.entries(rd).sort((a,b)=>b[1]-a[1]).map(([z,v])=>`• ${z}: ${v} incidents → Health ${zScore(z)}/100`).join('\n')}
+
+**Root cause summary:** The "${topOutage[0].replace(/_/g,' ')}" category is the primary driver. Combined with ${unstPct}% unstable telemetry, the grid is in a multi-point stress condition requiring coordinated response.`;
+    }
+
+    // ACTION / WHAT SHOULD I DO
+    if(isAction){
+      return `**Recommended Actions — Prioritised Response Plan**
+
+**Grid Status: ${health<40?'CRITICAL 🔴 — Immediate action required':health<70?'WATCH ⚠️ — Elevated response needed':'STABLE ✅ — Routine monitoring'}**
+
+**🔴 Immediate (now):**
+• Dispatch crews to **${worstZone[0]}** — ${worstZone[1]} incidents, health score ${zScore(worstZone[0])}/100
+• Address **${ic.critical||0} critical incidents** (full outages) — every minute = lost supply revenue
+• Isolate "${topOutage[0].replace(/_/g,' ')}" events — ${topOutage[1]} occurrences, dominant failure type
+
+**🟠 Short-term (next 2–4 hours):**
+• Investigate feeder relay settings for frequency excursion incidents (${ic.high||0} High-severity)
+• Check transformer load capacity in ${worstZone[0]} — likely operating above rated threshold
+• Review DS2 smart meter anomalies for demand-side causes in affected zones
+
+**🔵 Medium-term (today):**
+• Re-run XGBoost stability assessment after critical incidents resolved — target health > 60
+• Verify grid frequency stays within 49.8–50.2 Hz band (currently ${freq} Hz ${freqOk?'✅':'⚠️'})
+• Update incident playbooks for "${topOutage[0].replace(/_/g,' ')}" scenarios
+
+**📊 Monitoring:**
+• Health score refreshes every 60s — watch for improvement after actions taken
+• Set alert if any zone health drops below 25`;
+    }
+
+    // RISK assessment
+    if(isRisk){
+      return `**Risk Assessment — Current Grid State**
+
+**Overall Risk: ${health<40?'HIGH 🔴':health<70?'MEDIUM ⚠️':'LOW ✅'}** (Health ${health}/100)
+
+**Active risks:**
+1. **Cascade failure risk** — ${ic.critical||0} unresolved critical incidents + ${unstPct}% unstable telemetry = elevated probability of cascading outage across zones
+2. **Zone isolation risk** — ${worstZone[0]} with ${worstZone[1]} incidents could be isolated from the main grid if feeder faults are not contained
+3. **Frequency excursion risk** — ${freqOk?`Frequency at ${freq} Hz is within band, but high incident load can trigger sudden frequency drops`:`Frequency at ${freq} Hz is already outside safe band — risk of protection relay tripping`}
+4. **Demand-side risk** — ${ic.medium||0} medium incidents include high demand events; peak demand could exceed capacity thresholds
+
+**Probability outlook:**
+• Without intervention: health likely to decline further as ${topOutage[0].replace(/_/g,' ')} incidents compound
+• With critical incident resolution: health could recover to ${Math.min(100,health+20)}–${Math.min(100,health+35)} range`;
+    }
+
+    // COMPARE zones
+    if(isCompare && /zone/i.test(q)){
+      const zEntries=Object.entries(rd).sort((a,b)=>b[1]-a[1]);
+      return `**Zone Comparison — All 4 Zones**
+
+| Zone | Incidents | Share | Health | Status |
+|------|-----------|-------|--------|--------|
+${zEntries.map(([z,v])=>`| **${z}** | ${v} | ${((v/zTotInc)*100).toFixed(1)}% | **${zScore(z)}/100** | ${zScore(z)>=70?'Stable ✅':zScore(z)>=40?'Watch ⚠️':'Critical 🔴'} |`).join('\n')}
+
+**Most stressed:** ${zEntries[0][0]} — ${zEntries[0][1]} incidents, Health ${zScore(zEntries[0][0])}/100
+**Most stable:** ${zEntries[zEntries.length-1][0]} — ${zEntries[zEntries.length-1][1]} incidents, Health ${zScore(zEntries[zEntries.length-1][0])}/100
+
+Zone health is the global health score (${health}) weighted by incident share. Zones with higher incident density score proportionally lower. Focus recovery efforts on ${zEntries[0][0]} first for maximum impact.`;
+    }
+
+    // HOW is health calculated
+    if(isHow && /health|score|calculat/i.test(q)){
+      return `**How the Grid Health Score is Calculated**
+
+**Formula: Health Score = 100 − Unstable %**
+
+Step by step:
+1. The **XGBoost classifier** processes DS1 telemetry rows with 14 features: τ1–τ4 (reaction time constants), P1–P4 (power inputs), G1–G4 (gamma coefficients)
+2. Each row is labelled "stable" or "unstable"
+3. **Unstable % = ${unstPct}%** of all rows are unstable
+4. **Health = 100 − ${unstPct} = ${health}**
+
+**Supporting signals also considered:**
+• Isolation Forest anomaly flags from DS2 smart meter data
+• Grid frequency deviation from 50 Hz (currently ${freq} Hz, ${freqOk?'within safe band':'outside safe band'})
+
+**Thresholds:**
+• ≥ 70 → Stable ✅ (green)
+• 40–69 → Watch ⚠️ (amber)
+• < 40 → Critical 🔴 (red)
+
+Current: **${health}/100 — ${healthLbl}**. Refreshes every 60 seconds from the live API.`;
+    }
+
+    // HOW does the pipeline/agents work
+    if(isHow && /pipeline|agent|system|work|process|langgraph/i.test(q)){
+      return `**How the SGEIA Multi-Agent Pipeline Works**
+
+Your query flows through a **5-agent LangGraph StateGraph**:
+
+1. **LLM Query Router** — GPT-4o-mini classifies intent (incident / stability / smart_meter / cross_domain) and extracts metadata filters (zone, severity, equipment type)
+
+2. **Grid Retrieval Agent** — Hybrid RAG: ChromaDB semantic embeddings + BM25 keyword search on 200 indexed incidents. Top-K results retrieved and ranked.
+
+3. **Grid Stability Agent** — XGBoost classifier on DS1 telemetry (τ1–τ4, P1–P4, G1–G4) → health score **${health}/100**. Isolation Forest flags anomalies.
+
+4. **Smart Meter Agent** — Isolation Forest on DS2 consumption data → detects unusual demand patterns across zones.
+
+5. **Failure Analysis + Recommendation Agent** — Synthesises outputs from all agents → generates root cause + mitigation steps → **DeepEval faithfulness check** + **LLM-as-Judge score ≥ 3/5** required before response is sent.
+
+Memory: **LangGraph MemorySaver** maintains conversation context across turns within a session.`;
+    }
+  }
+
   // Per-zone data (each zone has its own incident share + derived health)
   const zoneIncidents={Zone_A:rd.Zone_A||0,Zone_B:rd.Zone_B||0,Zone_C:rd.Zone_C||0,Zone_D:rd.Zone_D||0};
   const totalInc=Object.values(zoneIncidents).reduce((a,b)=>a+b,0)||1;
@@ -1020,22 +1180,10 @@ function _localAnswer(query, widgetType){
       return `**All Zone Health Scores**\n\n${allZones()}`;
   }
 
-  // ── ANALYTICAL / WHY / CAUSE questions — catch-all for any widget ──────────
-  const isWhy   = /why|cause|reason|what.*caus|explain|because|due to|responsible|trigger/i.test(q);
+  // ── GENERAL fallback analytical catch ──────────────────────────────────────
   const isWhat  = /what (is|are|does)|what.*happen|tell me|describe|show me/i.test(q);
-  const isHow   = /how (does|do|is|are|can|to)/i.test(q);
-  const isRisk  = /risk|danger|threat|concern|worry|problem|issue|impact|affect/i.test(q);
-  const isCompare = /compar|vs|versus|differ|between|which.*better|which.*worse/i.test(q);
 
-  if(isWhy || isWhat || isHow || isRisk || isCompare){
-    const ic=dash.incident_counts||{};
-    const ss=dash.stability_summary||{};
-    const rd=dash.region_distribution||{};
-    const od=dash.outage_distribution||{};
-    const health=Math.round(100-(ss.unstable_pct??18.3));
-    const freq=+(ss.mean_freq_hz??49.92).toFixed(2);
-    const freqOk=freq>=49.8&&freq<=50.2;
-    const total=Object.values(rd).reduce((a,b)=>a+b,0)||1;
+  if(isWhat){
     const topOutage=Object.entries(od).sort((a,b)=>b[1]-a[1])[0]||['unknown',0];
     const critPct=(((ic.critical||0)/(ic.total||1))*100).toFixed(1);
     const unstPct=+(ss.unstable_pct??18.3).toFixed(1);
