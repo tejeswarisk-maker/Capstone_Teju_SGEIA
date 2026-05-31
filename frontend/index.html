@@ -240,6 +240,12 @@ button{cursor:pointer;font-family:inherit}
   border:none;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .2s;}
 .send-btn:hover{background:var(--accent-h)}
 .chat-hint{font-size:11px;color:var(--text3);text-align:center;margin-top:6px}
+/* ── Quick question chips ─────────────────────────────────────────────── */
+.quick-chips{display:flex;flex-wrap:wrap;gap:8px;padding:12px 0;justify-content:center}
+.quick-chip{padding:7px 14px;border-radius:20px;border:1.5px solid var(--accent);
+  background:transparent;color:var(--accent);font-size:12px;cursor:pointer;
+  transition:all .2s;text-align:left;}
+.quick-chip:hover{background:var(--accent);color:#fff}
 /* ── RAG Status Bar (compact) ─────────────────────────────────────────── */
 .rag-status-bar{display:flex;align-items:center;gap:8px;
   padding:6px 12px;border-radius:20px;
@@ -873,7 +879,7 @@ function openGeneralChat() {
     + `Incidents: ${snapshot.active_incidents.critical} Critical, ${snapshot.active_incidents.high} High, ${snapshot.active_incidents.medium} Medium, ${snapshot.active_incidents.low} Low. `
     + `Zones: Zone_A=${snapshot.zone_status.Zone_A.score} ${snapshot.zone_status.Zone_A.status}, Zone_B=${snapshot.zone_status.Zone_B.score} ${snapshot.zone_status.Zone_B.status}, Zone_C=${snapshot.zone_status.Zone_C.score} ${snapshot.zone_status.Zone_C.status}, Zone_D=${snapshot.zone_status.Zone_D.score} ${snapshot.zone_status.Zone_D.status}. `
     + `Frequency: ${snapshot.grid_frequency_hz} Hz. Ask anything across all widgets — compare zones, correlate incidents with stability, or get an overall grid assessment.`;
-  openChat('general', 'General Chat — All Widgets', desc, snapshot);
+  openChat('general', 'General Assistance', desc, snapshot);
 }
 
 // ── Chat system ────────────────────────────────────────────────────────────
@@ -881,11 +887,9 @@ function openChat(type,title,desc,extraMetrics){
   curWidget={type,title,desc,extraMetrics};
   $('chat-title').textContent=title;
   $('chat-subtitle').textContent='Context: '+title;
-  $('ctx-pill').textContent='🌐 General Chat — All Widgets';
-  const ph = type==='general' ? 'Compare zones, incidents, stability… ask anything.' : 'Ask about '+title+'…';
-  $('empty-lbl').textContent= type==='general'
-    ? 'Ask anything across all 12 widgets. Full dashboard context is attached.'
-    : 'Ask about '+title+'. Context is attached automatically.';
+  $('ctx-pill').textContent='🌐 General Assistance';
+  const ph = 'Ask anything about the grid, datasets, incidents…';
+  $('empty-lbl').textContent='Ask anything — grid stability, incidents, voltage, smart meter data';
   $('chat-inp').placeholder=ph;
   if(!threads[type])threads[type]=[];
   renderMsgs(threads[type]);
@@ -913,14 +917,58 @@ function renderThreadList(){
     ${t.length?`<div class="t-item active">${isGeneral?'General conversation':'This widget'} · ${t.filter(m=>m.role==='user').length} message${t.filter(m=>m.role==='user').length===1?'':'s'}</div>`:'<div style="font-size:11px;color:var(--text3);padding:4px 8px;">No messages yet</div>'}
   `;
 }
+// Convert markdown to safe HTML for AI responses
+function mdToHtml(text){
+  if(!text) return '';
+  return text
+    // Code blocks
+    .replace(/```[\w]*\n?([\s\S]*?)```/g, '<pre style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:11px;overflow-x:auto;white-space:pre-wrap;margin:6px 0">$1</pre>')
+    // Inline code
+    .replace(/`([^`]+)`/g, '<code style="background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:1px 5px;font-size:11px">$1</code>')
+    // Bold — highlight important keywords
+    .replace(/\*\*([^*]+)\*\*/g, '<strong style="color:var(--accent)">$1</strong>')
+    // Italic
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    // Headers
+    .replace(/^### (.+)$/gm, '<div style="font-weight:700;font-size:13px;margin:8px 0 4px;color:var(--text)">$1</div>')
+    .replace(/^## (.+)$/gm,  '<div style="font-weight:700;font-size:14px;margin:10px 0 4px;color:var(--text)">$1</div>')
+    // Numbered list
+    .replace(/^\d+\. (.+)$/gm, '<div style="padding:2px 0 2px 12px">• $1</div>')
+    // Bullet list
+    .replace(/^[•\-\*] (.+)$/gm, '<div style="padding:2px 0 2px 12px">• $1</div>')
+    // Line breaks
+    .replace(/\n/g, '<br>');
+}
+
+const QUICK_QUESTIONS = [
+  'Why is the grid health score low?',
+  'List 10 high voltage readings',
+  'Show critical incidents in Zone A',
+  'What is causing voltage instability?',
+  'Compare Zone A vs Zone B',
+  'List last 10 unstable DS1 readings',
+];
+
 function renderMsgs(msgs){
   const box=$('chat-msgs'),emp=$('chat-empty');
-  box.querySelectorAll('.msg').forEach(el=>el.remove());
-  emp.style.display=msgs.length?'none':'flex';
+  box.querySelectorAll('.msg,.quick-chips').forEach(el=>el.remove());
+  if(msgs.length===0){
+    emp.style.display='flex';
+    // Show quick question chips
+    const chips=document.createElement('div');
+    chips.className='quick-chips';
+    chips.innerHTML=QUICK_QUESTIONS.map(q=>
+      `<button class="quick-chip" onclick="sendQuick('${q.replace(/'/g,"\\'")}')">${q}</button>`
+    ).join('');
+    box.appendChild(chips);
+    return;
+  }
+  emp.style.display='none';
   msgs.forEach(m=>{
     const d=document.createElement('div');
     d.className='msg '+(m.role==='user'?'mu':'ma');
-    d.innerHTML=`<div class="msg-bbl">${esc(m.content)}</div><div class="msg-time">${m.time}</div>`;
+    const content = m.role==='ai' ? mdToHtml(m.content) : esc(m.content);
+    d.innerHTML=`<div class="msg-bbl">${content}</div><div class="msg-time">${m.time}</div>`;
     box.appendChild(d);
   });
   box.scrollTop=box.scrollHeight;
@@ -1500,6 +1548,7 @@ function _widgetMetrics(type){
   return map[type]||{};
 }
 
+function sendQuick(q){$('chat-inp').value=q;sendMsg();}
 $('chat-inp').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();}});
 $('chat-inp').addEventListener('input',function(){
   this.style.height='auto';this.style.height=Math.min(this.scrollHeight,100)+'px';

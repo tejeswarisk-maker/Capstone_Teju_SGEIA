@@ -53,54 +53,16 @@ class ChromaStore:
 
     def _get_embed_fn(self):
         """
-        Lazy-initialise the embedding function.
-
-        Priority:
-          1. OpenAI via Prodapt gateway (uses base_url override through httpx)
-          2. Local SentenceTransformer (no API key needed — always works)
-
-        NOTE: chromadb's built-in OpenAIEmbeddingFunction calls api.openai.com
-        directly and does NOT support a custom base_url, so it fails with the
-        Prodapt gateway key. We use LangChain OpenAIEmbeddings (which honours
-        base_url) wrapped as a custom callable instead.
+        Use local SentenceTransformer embeddings — no API key, no network needed.
+        Corporate proxy blocks external embedding APIs, so local is the only reliable option.
+        all-MiniLM-L6-v2 is already installed and gives good semantic search quality.
         """
         if self._embed_fn is None:
-            # Try LangChain OpenAI embeddings with Prodapt gateway URL
-            if settings.openai_api_key and settings.openai_base_url:
-                try:
-                    from langchain_openai import OpenAIEmbeddings
-                    import urllib3
-                    urllib3.disable_warnings()
-
-                    lc_embed = OpenAIEmbeddings(
-                        model=settings.openai_embedding_model,
-                        api_key=settings.openai_api_key,
-                        base_url=settings.openai_base_url,
-                        http_client=__import__("httpx").Client(verify=False),
-                    )
-
-                    class _LCEmbedFn:
-                        """Wraps LangChain embeddings as a ChromaDB EmbeddingFunction."""
-                        def __init__(self, lc): self._lc = lc
-                        def __call__(self, input):  # noqa: A002
-                            return self._lc.embed_documents(input)
-                        def name(self) -> str:
-                            return "langchain_openai_prodapt"
-
-                    self._embed_fn = _LCEmbedFn(lc_embed)
-                    logger.info("ChromaDB embeddings: LangChain OpenAI via Prodapt gateway.")
-                except Exception as e:
-                    logger.warning(f"LangChain OpenAI embeddings failed ({e}) — using local SentenceTransformer.")
-                    self._embed_fn = None
-
-            # Fallback: local SentenceTransformer (no API key, no network needed)
-            if self._embed_fn is None:
-                from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
-                self._embed_fn = SentenceTransformerEmbeddingFunction(
-                    model_name=settings.local_embedding_model,
-                )
-                logger.info("ChromaDB embeddings: local SentenceTransformer (all-MiniLM-L6-v2).")
-
+            from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+            self._embed_fn = SentenceTransformerEmbeddingFunction(
+                model_name=settings.local_embedding_model,
+            )
+            logger.info("ChromaDB embeddings: local SentenceTransformer (all-MiniLM-L6-v2).")
         return self._embed_fn
 
     def _get_or_create_collection(self, name: str):
