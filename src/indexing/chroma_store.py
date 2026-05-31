@@ -104,12 +104,30 @@ class ChromaStore:
         return self._embed_fn
 
     def _get_or_create_collection(self, name: str):
-        """Get or create a named ChromaDB collection with the embedding function."""
-        return self._client.get_or_create_collection(
-            name=name,
-            embedding_function=self._get_embed_fn(),
-            metadata={"hnsw:space": "cosine"},
-        )
+        """
+        Get or create a named ChromaDB collection.
+        Handles API differences across ChromaDB versions:
+          - Older (<0.5): get_or_create_collection(name, embedding_function, metadata)
+          - Newer (>=0.5): metadata kwarg moved / removed from get path
+        """
+        embed_fn = self._get_embed_fn()
+        # Try with metadata first (works on most versions when creating)
+        try:
+            return self._client.get_or_create_collection(
+                name=name,
+                embedding_function=embed_fn,
+                metadata={"hnsw:space": "cosine"},
+            )
+        except TypeError:
+            # Newer ChromaDB: metadata not accepted on get path — try without
+            try:
+                return self._client.get_or_create_collection(
+                    name=name,
+                    embedding_function=embed_fn,
+                )
+            except TypeError:
+                # Last resort: no embedding_function kwarg (very new API)
+                return self._client.get_or_create_collection(name=name)
 
     # ── Incidents (Pipeline C — primary RAG) ──────────────────────────────────
 

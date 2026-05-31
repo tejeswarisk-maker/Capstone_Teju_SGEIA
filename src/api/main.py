@@ -641,20 +641,55 @@ async def rag_stream_endpoint(request: ChatRequest):
                 "count": final_k,
             }, event="step")
 
-            # ── Detect query intent across all data sources ───────────────────
-            wants_stability = any(k in query_lower for k in [
-                "tau","p1","p2","p3","p4","g1","g2","g3","g4","stab","stable","unstable",
-                "stability","health","score","xgboost","model","predict","telemetry",
-                "frequency","hz","oscillation","power balance","elasticity","reaction time"
-            ])
-            wants_meter = any(k in query_lower for k in [
-                "meter","consumption","household","kwh","watt","reactive","sub meter",
-                "kitchen","laundry","hvac","demand","smart meter","ds2","energy use"
-            ])
-            wants_dataset = any(k in query_lower for k in [
-                "dataset","data","column","feature","row","record","csv","how many",
-                "distribution","statistics","mean","average","range","value","explain"
-            ])
+            # ── Smart data routing — map query keywords to correct dataset ─────
+            # DS1 columns: tau1-4, p1-4, g1-4, stab, stabf, grid_frequency,
+            #              region, equipment_type, transformer_status, outage_event
+            # DS2 columns: voltage, current, power_consumption, reactive_power,
+            #              sub_metering_*, demand_load, grid_frequency
+            # Incidents:   incident_id, voltage, current, power_consumption,
+            #              demand_load, grid_frequency, severity, description
+
+            DS1_KEYWORDS = ["tau","tau1","tau2","tau3","tau4",
+                            "p1","p2","p3","p4","g1","g2","g3","g4",
+                            "stab","stabf","stability","unstable","stable",
+                            "reaction time","elasticity","power balance",
+                            "xgboost","ds1","telemetry","oscillation"]
+
+            DS2_KEYWORDS = ["voltage","volt","current","amp",
+                            "power consumption","reactive power","reactive",
+                            "sub metering","sub_metering","kitchen","laundry","hvac",
+                            "household","demand load","demand","ds2","smart meter",
+                            "consumption","kwh","watt","energy use","energy usage"]
+
+            INCIDENT_KEYWORDS = ["incident","outage","fault","failure","event",
+                                  "zone","region","severity","critical","high","medium","low",
+                                  "full outage","partial outage","frequency excursion",
+                                  "voltage deviation","renewable","meter dropout",
+                                  "equipment","transformer","substation"]
+
+            RAW_KEYWORDS = ["last","latest","recent","first","top","give me",
+                            "show me","list","fetch","records","rows","readings",
+                            "levels","values","entries","data","10","20","5","50"]
+
+            wants_ds1       = any(k in query_lower for k in DS1_KEYWORDS)
+            wants_ds2       = any(k in query_lower for k in DS2_KEYWORDS)
+            wants_incidents = any(k in query_lower for k in INCIDENT_KEYWORDS)
+            wants_raw_data  = any(k in query_lower for k in RAW_KEYWORDS)
+
+            # grid_frequency is in both DS1 and DS2 — check surrounding context
+            if "frequency" in query_lower or "hz" in query_lower:
+                if wants_ds2:
+                    pass  # DS2 freq context
+                else:
+                    wants_ds1 = True  # default freq questions to DS1
+
+            # If no specific dataset detected, include everything
+            if not wants_ds1 and not wants_ds2 and not wants_incidents:
+                wants_ds1 = wants_ds2 = wants_incidents = True
+
+            wants_stability = wants_ds1
+            wants_meter     = wants_ds2
+            wants_dataset   = wants_raw_data or wants_ds1 or wants_ds2
 
             # ── Step 7: DS1 Stability Data ────────────────────────────────────
             stability_info = {}
@@ -707,12 +742,41 @@ async def rag_stream_endpoint(request: ChatRequest):
                             for s in pred["shap_top5"]
                         )
 
+                    # Pull raw DS1 rows for DS1-specific column questions
+                    raw_rows_text = ""
+                    n_match = re.search(r'\b(\d+)\b', request.query)
+                    n_rows  = int(n_match.group(1)) if n_match else 10
+                    n_rows  = min(n_rows, 20)
+
+                    if wants_raw_data and wants_ds1 and not wants_ds2:
+                        # DS1-specific columns: tau, p, g, stab, frequency
+                        if any(k in query_lower for k in ["tau","tau1","tau2","tau3","tau4"]):
+                            show_cols = ["timestamp","region","tau1","tau2","tau3","tau4","stabf","outage_event"]
+                        elif any(k in query_lower for k in ["p1","p2","p3","p4"]):
+                            show_cols = ["timestamp","region","p1","p2","p3","p4","stabf","outage_event"]
+                        elif any(k in query_lower for k in ["g1","g2","g3","g4","elasticity"]):
+                            show_cols = ["timestamp","region","g1","g2","g3","g4","stabf"]
+                        elif any(k in query_lower for k in ["stab","stability score"]):
+                            show_cols = ["timestamp","region","stab","stabf","grid_frequency","outage_event"]
+                        elif any(k in query_lower for k in ["frequency","hz","freq"]):
+                            show_cols = ["timestamp","region","grid_frequency","stabf","transformer_status","outage_event"]
+                        else:
+                            show_cols = ["timestamp","region","grid_frequency","stabf","transformer_status","outage_event"]
+
+                        show_cols = [c for c in show_cols if c in ds1_full.columns]
+                        raw_df = ds1_full[show_cols].tail(n_rows) if "last" in query_lower or "recent" in query_lower else ds1_full[show_cols].head(n_rows)
+                        raw_rows_text = (
+                            f"\n\nRAW DS1 ROWS ({n_rows} rows — smart_grid_stability_augmented.csv):\n"
+                            + raw_df.to_string(index=False)
+                        )
+
                     ds1_context = (
                         f"DS1 Dataset Stats (60,000 rows from smart_grid_stability_augmented.csv):\n"
                         + "\n".join(f"  {k}: {v}" for k,v in ds1_stats.items())
                         + f"\n\nLive XGBoost Prediction on sampled row:\n"
                         + f"  tau1={feats['tau1']:.4f}, p1={feats['p1']:.4f}, g1={feats['g1']:.4f}\n"
                         + f"  → {stab_text}{shap_lines}"
+                        + raw_rows_text
                     )
             except Exception as e:
                 stab_text   = f"Stability model unavailable: {e}"
@@ -765,10 +829,37 @@ async def rag_stream_endpoint(request: ChatRequest):
                             f"kitchen:{r['sub_metering_kitchen']:.0f}W laundry:{r['sub_metering_laundry']:.0f}W hvac:{r['sub_metering_hvac']:.0f}W"
                             for i,r in enumerate(top5)
                         )
+                        # Pull raw DS2 rows for voltage/current/consumption questions
+                        ds2_raw_text = ""
+                        if wants_raw_data:
+                            n_match2 = re.search(r'\b(\d+)\b', request.query)
+                            n_rows2  = min(int(n_match2.group(1)) if n_match2 else 10, 20)
+
+                            if any(k in query_lower for k in ["voltage","volt"]):
+                                ds2_show = ["timestamp","region","voltage","current","power_consumption","grid_frequency","transformer_status","outage_event"]
+                            elif any(k in query_lower for k in ["current","amp"]):
+                                ds2_show = ["timestamp","region","current","voltage","power_consumption","grid_frequency"]
+                            elif any(k in query_lower for k in ["reactive","reactive_power"]):
+                                ds2_show = ["timestamp","region","reactive_power","voltage","current","power_consumption"]
+                            elif any(k in query_lower for k in ["sub_metering","kitchen","laundry","hvac"]):
+                                ds2_show = ["timestamp","region","sub_metering_kitchen","sub_metering_laundry","sub_metering_hvac","power_consumption"]
+                            elif any(k in query_lower for k in ["demand","demand_load"]):
+                                ds2_show = ["timestamp","region","demand_load","power_consumption","voltage","current"]
+                            else:
+                                ds2_show = ["timestamp","region","voltage","current","power_consumption","reactive_power","demand_load","grid_frequency"]
+
+                            ds2_show = [c for c in ds2_show if c in ds2.columns]
+                            raw_ds2_df = ds2[ds2_show].tail(n_rows2) if "last" in query_lower or "recent" in query_lower else ds2[ds2_show].head(n_rows2)
+                            ds2_raw_text = (
+                                f"\n\nRAW DS2 ROWS ({n_rows2} rows — household_power_consumption.csv):\n"
+                                + raw_ds2_df.to_string(index=False)
+                            )
+
                         ds2_context = (
                             f"DS2 Smart Meter Dataset (household_power_consumption.csv, sample n={len(ds2):,}):\n"
                             + "\n".join(f"  {k}: {v}" for k,v in ds2_stats.items())
                             + f"\n\nTop 5 highest consumption readings:\n{top5_text}"
+                            + ds2_raw_text
                         )
                         yield _sse_event({
                             "step": "ds2",
@@ -890,26 +981,32 @@ You have access to TWO datasets and a 200-incident knowledge base — use ALL re
 
             # ── Final answer (LLM or data-driven fallback) ────────────────────
             if not llm_answer:
-                # LLM is down — show retrieved data honestly, not a fake answer
-                parts = [
-                    f"⚠️ **AI model unavailable** — showing raw retrieved data for: *{request.query}*\n",
-                    f"To get proper AI analysis, add a Groq API key to .env: `GROQ_API_KEY=gsk_...`\n",
-                ]
-                if fused_incidents:
-                    parts.append(f"\n**Retrieved Incidents ({final_k} matches):**")
+                # LLM is down — serve actual data relevant to the question
+                parts = [f"⚠️ **AI model unavailable** — showing data retrieved for: *{request.query}*\n"]
+
+                # Show DS2 data first if question was about voltage/current/consumption
+                if ds2_context and wants_ds2:
+                    parts.append(f"**DS2 Smart Meter Data (household_power_consumption.csv):**\n```\n{ds2_context[:1500]}\n```")
+
+                # Show DS1 data if question was about tau/p/g/stability/frequency
+                if ds1_context and wants_ds1 and not wants_ds2:
+                    parts.append(f"**DS1 Stability Data (smart_grid_stability_augmented.csv):**\n```\n{ds1_context[:1500]}\n```")
+
+                # Only show incidents if question was specifically about incidents
+                if fused_incidents and wants_incidents and not wants_ds2 and not (wants_raw_data and wants_ds1):
+                    parts.append(f"\n**Related Incidents ({final_k}):**")
                     for i, inc in enumerate(fused_incidents, 1):
                         meta = inc.get("metadata", {})
                         parts.append(
                             f"**[{i}] {inc.get('id','?')}** | {meta.get('region','?')} | "
                             f"{meta.get('severity','?').upper()} | {meta.get('outage_event','?','').replace('_',' ')}\n"
-                            f"> {inc.get('document','')[:200]}"
+                            f"> {inc.get('document','')[:180]}"
                         )
-                if ds1_context:
-                    parts.append(f"\n**DS1 Stability Data:**\n```\n{ds1_context[:500]}\n```")
-                if ds2_context:
-                    parts.append(f"\n**DS2 Smart Meter Data:**\n```\n{ds2_context[:400]}\n```")
-                if not fused_incidents and not ds1_context:
-                    parts.append("No data retrieved for this query.")
+
+                if len(parts) == 1:
+                    parts.append("No matching data found for this query.")
+
+                parts.append(f"\n_Add `GROQ_API_KEY=gsk_...` to .env for full AI analysis._")
                 llm_answer = "\n".join(parts)
 
             yield _sse_event({"answer": llm_answer, "request_id": request_id}, event="answer")
