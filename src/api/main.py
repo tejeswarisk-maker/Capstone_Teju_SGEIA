@@ -849,9 +849,32 @@ async def rag_stream_endpoint(request: ChatRequest):
                                 ds2_show = ["timestamp","region","voltage","current","power_consumption","reactive_power","demand_load","grid_frequency"]
 
                             ds2_show = [c for c in ds2_show if c in ds2.columns]
-                            raw_ds2_df = ds2[ds2_show].tail(n_rows2) if "last" in query_lower or "recent" in query_lower else ds2[ds2_show].head(n_rows2)
+
+                            # Smart sorting based on qualifier words in query
+                            sort_col, ascending = None, False
+                            if any(k in query_lower for k in ["high voltage","highest voltage","max voltage","top voltage"]):
+                                sort_col, ascending = "voltage", False
+                            elif any(k in query_lower for k in ["low voltage","lowest voltage","min voltage"]):
+                                sort_col, ascending = "voltage", True
+                            elif any(k in query_lower for k in ["high current","highest current"]):
+                                sort_col, ascending = "current", False
+                            elif any(k in query_lower for k in ["high power","highest power","max power","high consumption"]):
+                                sort_col, ascending = "power_consumption", False
+                            elif any(k in query_lower for k in ["high demand"]):
+                                sort_col, ascending = "demand_load", False
+
+                            if sort_col and sort_col in ds2.columns:
+                                raw_ds2_df = ds2[ds2_show].sort_values(sort_col, ascending=ascending).head(n_rows2)
+                                sort_label = f"{'highest' if not ascending else 'lowest'} {sort_col}"
+                            elif "last" in query_lower or "recent" in query_lower:
+                                raw_ds2_df = ds2[ds2_show].tail(n_rows2)
+                                sort_label = "most recent"
+                            else:
+                                raw_ds2_df = ds2[ds2_show].head(n_rows2)
+                                sort_label = "first"
+
                             ds2_raw_text = (
-                                f"\n\nRAW DS2 ROWS ({n_rows2} rows — household_power_consumption.csv):\n"
+                                f"\n\nDS2 DATA — top {n_rows2} by {sort_label} (household_power_consumption.csv):\n"
                                 + raw_ds2_df.to_string(index=False)
                             )
 
@@ -984,13 +1007,21 @@ You have access to TWO datasets and a 200-incident knowledge base — use ALL re
                 # LLM is down — serve actual data relevant to the question
                 parts = [f"⚠️ **AI model unavailable** — showing data retrieved for: *{request.query}*\n"]
 
-                # Show DS2 data first if question was about voltage/current/consumption
-                if ds2_context and wants_ds2:
-                    parts.append(f"**DS2 Smart Meter Data (household_power_consumption.csv):**\n```\n{ds2_context[:1500]}\n```")
+                # For raw data questions — just show the table, no stats noise
+                if wants_ds2 and "ds2_raw_text" in dir() or (ds2_context and "RAW DS2" in ds2_context):
+                    # Extract only the RAW rows section
+                    raw_section = ds2_context.split("RAW DS2")
+                    if len(raw_section) > 1:
+                        parts.append(f"**DS2 Data — {request.query}:**\n```\nRAW DS2{raw_section[-1]}\n```")
+                    else:
+                        parts.append(f"**DS2 Smart Meter Data:**\n```\n{ds2_context[-800:]}\n```")
 
-                # Show DS1 data if question was about tau/p/g/stability/frequency
-                if ds1_context and wants_ds1 and not wants_ds2:
-                    parts.append(f"**DS1 Stability Data (smart_grid_stability_augmented.csv):**\n```\n{ds1_context[:1500]}\n```")
+                elif ds1_context and wants_ds1 and not wants_ds2:
+                    raw_section = ds1_context.split("RAW DS1")
+                    if len(raw_section) > 1:
+                        parts.append(f"**DS1 Data — {request.query}:**\n```\nRAW DS1{raw_section[-1]}\n```")
+                    else:
+                        parts.append(f"**DS1 Stability Data:**\n```\n{ds1_context[-800:]}\n```")
 
                 # Only show incidents if question was specifically about incidents
                 if fused_incidents and wants_incidents and not wants_ds2 and not (wants_raw_data and wants_ds1):

@@ -240,24 +240,12 @@ button{cursor:pointer;font-family:inherit}
   border:none;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .2s;}
 .send-btn:hover{background:var(--accent-h)}
 .chat-hint{font-size:11px;color:var(--text3);text-align:center;margin-top:6px}
-/* ── RAG Pipeline Steps ───────────────────────────────────────────────── */
-.rag-pipeline{padding:12px 14px;min-width:280px;max-width:420px}
-.rag-header{font-size:12px;font-weight:700;color:var(--accent);margin-bottom:10px;
-  display:flex;align-items:center;gap:6px}
-.rag-step{display:grid;grid-template-columns:20px 1fr auto auto;
-  align-items:start;gap:4px 8px;padding:6px 0;
-  border-bottom:1px solid var(--border);font-size:12px}
-.rag-step:last-child{border-bottom:none}
-.rag-icon{font-size:14px;line-height:1.4}
-.rag-label{font-weight:600;color:var(--text);font-size:12px}
-.rag-status{font-size:11px;opacity:.8}
-.rag-count{font-size:11px;color:var(--accent);font-weight:600;
-  background:#eff6ff;padding:1px 6px;border-radius:10px}
-[data-theme="dark"] .rag-count{background:#1e3a5f}
-.rag-detail{grid-column:2/-1;font-size:11px;color:var(--text2);
-  line-height:1.4;margin-top:2px}
-.rag-running .rag-label{color:var(--accent)}
-.rag-done .rag-label{color:var(--text)}
+/* ── RAG Status Bar (compact) ─────────────────────────────────────────── */
+.rag-status-bar{display:flex;align-items:center;gap:8px;
+  padding:6px 12px;border-radius:20px;
+  background:var(--surface);border:1px solid var(--border);
+  font-size:12px;color:var(--text2);white-space:nowrap;
+  max-width:280px;}
 
 /* ── Scrollbar ────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar{width:5px;height:5px}
@@ -1352,16 +1340,17 @@ async function sendMsg(){
   const box=$('chat-msgs');
   $('chat-empty').style.display='none';
 
-  // Pipeline steps container — shown live as SSE events arrive
+  // Compact single-line status bar instead of big pipeline block
   const pipelineDiv = document.createElement('div');
   pipelineDiv.className = 'msg ma';
   pipelineDiv.id = 'pipeline-steps';
-  pipelineDiv.innerHTML = '<div class="msg-bbl rag-pipeline"><div class="rag-header">🔄 RAG Pipeline Running…</div><div id="rag-steps"></div></div>';
+  pipelineDiv.innerHTML = '<div class="rag-status-bar"><span id="rag-status-icon">⏳</span> <span id="rag-status-text">Running RAG pipeline…</span></div>';
   box.appendChild(pipelineDiv);
   box.scrollTop = box.scrollHeight;
 
-  const stepsEl = document.getElementById('rag-steps');
-  const stepMap = {}; // track steps by key so we can update in-place
+  // stepsEl not used for rendering — we just update the status bar
+  const stepsEl = {appendChild:()=>{}}; // no-op
+  const stepMap = {};
 
   const ctx = curWidget ? {
     type:        curWidget.type,
@@ -1406,17 +1395,15 @@ async function sendMsg(){
         try{ payload = JSON.parse(dataStr); } catch{ continue; }
 
         if(eventType === 'step'){
-          // Render pipeline step — update in-place if already shown
-          if(!stepMap[payload.step]){
-            const stepEl = document.createElement('div');
-            stepEl.id = `step-${payload.step}`;
-            stepEl.innerHTML = _renderStep(payload);
-            stepsEl.appendChild(stepEl);
-            stepMap[payload.step] = stepEl;
-          } else {
-            stepMap[payload.step].innerHTML = _renderStep(payload);
-          }
-          box.scrollTop = box.scrollHeight;
+          // Just update the compact status bar text
+          const icons={load_kb:'📂',chunk:'✂️',embed:'🔢',bm25_search:'🔍',
+                       chroma_search:'🧠',fuse:'⚗️',stability:'📊',ds2:'⚡',llm:'🤖'};
+          const ic = icons[payload.step]||'⚙️';
+          const st = payload.status==='done'?'✅':payload.status==='running'?'⏳':'✅';
+          const statusEl = document.getElementById('rag-status-text');
+          const iconEl   = document.getElementById('rag-status-icon');
+          if(statusEl) statusEl.textContent = payload.label || payload.step;
+          if(iconEl)   iconEl.textContent = st + ' ' + ic;
         }
         else if(eventType === 'answer'){
           // Remove pipeline steps, show final answer
