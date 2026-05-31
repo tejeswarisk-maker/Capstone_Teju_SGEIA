@@ -559,27 +559,32 @@ const FALLBACK_DASH = {
   stability_summary:{unstable_pct:18.3,mean_freq_hz:49.92,stab_score_p25:-.02,stab_score_p75:.06}
 };
 async function loadMetrics(){
+  const lbl=$('last-updated-lbl');
+  if(lbl) lbl.textContent='Refreshing…';
   try{
     const r=await fetch(`${API}/api/dashboard/metrics`,{signal:AbortSignal.timeout(12000)});
-    if(!r.ok)throw new Error();
-    dash=await r.json();
+    if(!r.ok)throw new Error(`HTTP ${r.status}`);
+    const newDash=await r.json();
+    dash=newDash;
     dashLoaded=true;
+    _refreshCountdown=60;
     const t=new Date();
-    $('last-updated-lbl').textContent=`Updated ${t.getHours().toString().padStart(2,'0')}:${t.getMinutes().toString().padStart(2,'0')}:${t.getSeconds().toString().padStart(2,'0')}`;
-  }catch{
-    // Only use fallback if we've never loaded real data — avoids flipping health score
-    if(!dashLoaded) dash=FALLBACK_DASH;
-    $('last-updated-lbl').textContent=`API offline — cached data`;
+    if(lbl) lbl.textContent=`Updated ${t.getHours().toString().padStart(2,'0')}:${t.getMinutes().toString().padStart(2,'0')}:${t.getSeconds().toString().padStart(2,'0')} · next in 60s`;
+    renderAll();
+  }catch(e){
+    if(!dashLoaded){ dash=FALLBACK_DASH; renderAll(); }
+    if(lbl) lbl.textContent=`API offline`;
   }
-  renderAll();
 }
 
 // Countdown ticker — shows "Next refresh in Xs" between API calls
-let _refreshCountdown=60;
+let _refreshCountdown=30;
 setInterval(()=>{
   _refreshCountdown=Math.max(0,_refreshCountdown-1);
-  if(_refreshCountdown>0&&dashLoaded){
-    $('last-updated-lbl').textContent=($('last-updated-lbl').textContent.split('·')[0]||'').trim()+` · next in ${_refreshCountdown}s`;
+  const lbl=$('last-updated-lbl');
+  if(lbl&&dashLoaded&&_refreshCountdown>0){
+    const base=lbl.textContent.split('·')[0].trim();
+    lbl.textContent=`${base} · next in ${_refreshCountdown}s`;
   }
 },1000);
 
@@ -1340,6 +1345,23 @@ async function sendMsg(){
   const box=$('chat-msgs');
   $('chat-empty').style.display='none';
 
+  // Handle greetings instantly without hitting the backend
+  const _greetRx = /^\s*(hi|hello|hey|howdy|good\s*(morning|evening|afternoon)|sup|yo|what.?s up|how are you|who are you)\s*[!?.]?\s*$/i;
+  if(_greetRx.test(query)){
+    threads[type].push({role:'ai', content:
+      "👋 Hello! I'm **SGEIA** — Smart Grid Energy Intelligence Assistant.\n\n"+
+      "I can help you with:\n"+
+      "• **Grid stability** — why is health low, what's causing instability\n"+
+      "• **Incident analysis** — list incidents in Zone A, show critical outages\n"+
+      "• **Data queries** — list 10 high voltages, show last 5 tau1 values\n"+
+      "• **Smart meter** — high demand events, meter dropouts, consumption\n"+
+      "• **Zone comparison** — compare Zone A vs Zone B\n\n"+
+      "Try: *\"list 10 high voltage readings\"* or *\"why is health score low?\"*",
+      time:fmtT()});
+    renderMsgs(threads[type]);
+    return;
+  }
+
   // Compact single-line status bar instead of big pipeline block
   const pipelineDiv = document.createElement('div');
   pipelineDiv.className = 'msg ma';
@@ -1490,7 +1512,7 @@ $('chat-inp').addEventListener('input',function(){
   $('health-val').textContent='…';
   await checkHealth();
   await loadMetrics(); // sets dashLoaded=true on success, renders once with real data
-  setInterval(()=>{checkHealth();loadMetrics();_refreshCountdown=60;},60000);
+  setInterval(()=>{checkHealth();loadMetrics();},30000); // refresh every 30s
   setInterval(renderAgentFeed,8000);
 })();
 </script>

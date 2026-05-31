@@ -834,6 +834,12 @@ async def rag_stream_endpoint(request: ChatRequest):
                             "mean_reactive_kvar":    f"{ds2['reactive_power'].mean():.3f}",
                             "high_demand_events":    int((ds2['outage_event']=='high_demand_event').sum()),
                             "meter_dropouts":        int((ds2['outage_event']=='meter_dropout').sum()),
+                            "voltage_min":           f"{ds2['voltage'].min():.2f}V",
+                            "voltage_max":           f"{ds2['voltage'].max():.2f}V",
+                            "voltage_std":           f"{ds2['voltage'].std():.3f}V",
+                            "voltage_below_220":     int((ds2['voltage'] < 220).sum()),
+                            "voltage_above_250":     int((ds2['voltage'] > 250).sum()),
+                            "voltage_nominal_band":  "220V-250V (±10% of 230V nominal)",
                             "p85_power_threshold":   f"{ds2['power_consumption'].quantile(0.85):.3f} kW",
                             "sub_kitchen_mean":      f"{ds2['sub_metering_kitchen'].mean():.1f}W",
                             "sub_laundry_mean":      f"{ds2['sub_metering_laundry'].mean():.1f}W",
@@ -973,15 +979,33 @@ You have access to TWO datasets and a 200-incident knowledge base — use ALL re
 === INCIDENT KNOWLEDGE BASE (RAG: BM25 + ChromaDB hybrid, top {final_k}) ===
 {incidents_context}
 
+=== DATASET COLUMN REFERENCE ===
+DS1 (smart_grid_stability_augmented.csv) columns:
+  tau1,tau2,tau3,tau4 = reaction time constants (higher = slower response = more unstable)
+  p1 = power produced (positive), p2,p3,p4 = power consumed (negative)
+  g1,g2,g3,g4 = price elasticity coefficients
+  stab = stability margin (negative = stable, positive = unstable)
+  stabf = label: 'stable' or 'unstable'
+  grid_frequency = Hz reading
+  NO voltage column in DS1
+
+DS2 (household_power_consumption.csv) columns:
+  voltage = actual voltage reading (V) — nominal 230-245V
+  current = amperes
+  power_consumption = kW
+  reactive_power = kVAR
+  sub_metering_kitchen, sub_metering_laundry, sub_metering_hvac = watts
+
 === ANSWERING RULES ===
-- For questions about tau/p/g/stab/frequency/stability → use DS1 data and XGBoost results
-- For questions about consumption/power/meter/demand/reactive/sub-metering → use DS2 data
-- For questions about incidents/outages/zones/failures → use the incident knowledge base
-- For general grid questions → combine all sources intelligently
-- Always cite actual numbers, IDs, and values from the data above
-- Explain WHY, not just what — root causes, correlations, implications
-- Format with **bold** headers and clear structure
-- 200-400 words unless the question asks for a detailed list"""
+- Answer ONLY from the data provided in the sections above — do not invent or assume values
+- For "why" questions: find the specific values in DS1/DS2/incidents that PROVE the claim, cite them directly
+  Example: "DS1 shows tau1 mean=5.25 (high reaction time) → slow response → instability confirmed"
+  Example: "DS2 shows voltage range 226V-251V (±11% deviation from 240V nominal) → voltage instability confirmed"
+  Example: "Incidents show 20,958 voltage_deviation events → distributed across all 4 zones"
+- For data queries: clean numbered list or table, no narrative
+- For analysis: cite specific numbers, explain the mechanism, max 5 bullet points
+- DO NOT add "Next Steps", "Recommendations", "Predictive Modeling" sections unless asked
+- Max 150 words. Be direct and specific."""
 
             # ── Call LLM — Groq first (confirmed working), Prodapt fallback ──────
             import os as _os
