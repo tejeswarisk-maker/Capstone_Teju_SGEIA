@@ -1435,11 +1435,21 @@ async function sendMsg(){
     }
   } catch(e) {
     pipelineDiv.remove();
-    // Full offline fallback
-    const fallback = _localAnswer(query, type)
-                  || _localAnswer(query, 'general')
-                  || `**Backend offline.** Health: **${Math.round(100-((dash.stability_summary||{}).unstable_pct??18.3))}/100** | Ask "why is health low" or "compare zones" for analysis.`;
-    threads[type].push({role:'ai', content:fallback, time:fmtT()});
+    // When backend is unreachable, show honest message + what we know from dashboard data
+    const h = Math.round(100-((dash.stability_summary||{}).unstable_pct??18.3));
+    const ic = dash.incident_counts||{};
+    const freq = +((dash.stability_summary||{}).mean_freq_hz??50).toFixed(2);
+    const offlineMsg =
+      `⚠️ **AI backend is not reachable** — cannot answer "${query}"\n\n` +
+      `**What the dashboard currently shows:**\n` +
+      `• Grid Health: **${h}/100** (${h>=70?'Stable ✅':h>=40?'Watch ⚠️':'Critical 🔴'})\n` +
+      `• Incidents: **${ic.total||0} total** — ${ic.critical||0} Critical, ${ic.high||0} High, ${ic.medium||0} Medium, ${ic.low||0} Low\n` +
+      `• Frequency: **${freq} Hz**\n\n` +
+      `**To get AI answers, add a free Groq API key:**\n` +
+      `1. Go to console.groq.com → create free account → copy API key\n` +
+      `2. Add to .env: \`GROQ_API_KEY=gsk_...\`\n` +
+      `3. Restart the backend`;
+    threads[type].push({role:'ai', content: offlineMsg, time:fmtT()});
     renderMsgs(threads[type]);
   }
 }

@@ -890,24 +890,27 @@ You have access to TWO datasets and a 200-incident knowledge base — use ALL re
 
             # ── Final answer (LLM or data-driven fallback) ────────────────────
             if not llm_answer:
-                parts = []
+                # LLM is down — show retrieved data honestly, not a fake answer
+                parts = [
+                    f"⚠️ **AI model unavailable** — showing raw retrieved data for: *{request.query}*\n",
+                    f"To get proper AI analysis, add a Groq API key to .env: `GROQ_API_KEY=gsk_...`\n",
+                ]
                 if fused_incidents:
-                    parts.append(f"**Matched Incidents ({final_k}):**\n")
+                    parts.append(f"\n**Retrieved Incidents ({final_k} matches):**")
                     for i, inc in enumerate(fused_incidents, 1):
                         meta = inc.get("metadata", {})
                         parts.append(
-                            f"**[{i}] {inc.get('id','?')}** — {meta.get('region','?')} | "
-                            f"{meta.get('severity','?').upper()} | {meta.get('outage_event','?').replace('_',' ')}\n"
-                            f"_{inc.get('document','')[:200]}_\n"
+                            f"**[{i}] {inc.get('id','?')}** | {meta.get('region','?')} | "
+                            f"{meta.get('severity','?').upper()} | {meta.get('outage_event','?','').replace('_',' ')}\n"
+                            f"> {inc.get('document','')[:200]}"
                         )
                 if ds1_context:
-                    parts.append(f"\n**DS1 Stability:**\n{ds1_context[:400]}")
+                    parts.append(f"\n**DS1 Stability Data:**\n```\n{ds1_context[:500]}\n```")
                 if ds2_context:
-                    parts.append(f"\n**DS2 Smart Meter:**\n{ds2_context[:400]}")
-                llm_answer = "\n".join(parts) if parts else (
-                    "No matching data found. Try asking about a specific zone, "
-                    "outage type, tau/p/g values, or consumption patterns."
-                )
+                    parts.append(f"\n**DS2 Smart Meter Data:**\n```\n{ds2_context[:400]}\n```")
+                if not fused_incidents and not ds1_context:
+                    parts.append("No data retrieved for this query.")
+                llm_answer = "\n".join(parts)
 
             yield _sse_event({"answer": llm_answer, "request_id": request_id}, event="answer")
 
