@@ -141,7 +141,25 @@ class StabilityModel:
 
         # ── SHAP explainer ────────────────────────────────────────────────────
         import shap
-        self._shap_explainer_cls = shap.TreeExplainer(self.classifier)
+        # Fix: XGBoost ≥1.7 saves base_score as '[6.38E-1]' (with brackets).
+        # SHAP's TreeExplainer can't parse this string — patch it to a plain float.
+        try:
+            cfg = self.classifier.get_booster().save_config()
+            import json, re
+            cfg_dict = json.loads(cfg)
+            bs_raw = (cfg_dict.get("learner", {})
+                              .get("learner_model_param", {})
+                              .get("base_score", "0.5"))
+            # Strip brackets e.g. '[6.38E-1]' → '6.38E-1'
+            bs_clean = re.sub(r"[\[\]]", "", str(bs_raw))
+            self.classifier.get_booster().set_param("base_score", float(bs_clean))
+        except Exception:
+            pass  # if patching fails, SHAP will try on its own
+        try:
+            self._shap_explainer_cls = shap.TreeExplainer(self.classifier)
+        except Exception as shap_err:
+            logger.warning(f"SHAP TreeExplainer init failed ({shap_err}) — SHAP disabled.")
+            self._shap_explainer_cls = None
 
         # ── Save to disk ──────────────────────────────────────────────────────
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
@@ -161,8 +179,22 @@ class StabilityModel:
         self.regressor  = joblib.load(STABILITY_REGRESSOR_PATH)
         self.scaler     = joblib.load(SCALER_DS1_PATH)
 
-        import shap
-        self._shap_explainer_cls = shap.TreeExplainer(self.classifier)
+        import shap, json, re
+        # Patch base_score bracket issue before SHAP reads it
+        try:
+            cfg_dict = json.loads(self.classifier.get_booster().save_config())
+            bs_raw   = (cfg_dict.get("learner", {})
+                                .get("learner_model_param", {})
+                                .get("base_score", "0.5"))
+            bs_clean = re.sub(r"[\[\]]", "", str(bs_raw))
+            self.classifier.get_booster().set_param("base_score", float(bs_clean))
+        except Exception:
+            pass
+        try:
+            self._shap_explainer_cls = shap.TreeExplainer(self.classifier)
+        except Exception as shap_err:
+            logger.warning(f"SHAP load failed ({shap_err}) — SHAP disabled.")
+            self._shap_explainer_cls = None
         self._loaded = True
         logger.info("Stability models loaded from disk.")
 
@@ -205,19 +237,24 @@ class StabilityModel:
         # Regressor
         stab_score = float(self.regressor.predict(X_scaled)[0])
 
-        # SHAP
-        shap_vals = self._shap_explainer_cls.shap_values(X_scaled)[0]
-        if isinstance(shap_vals, list):
-            shap_vals = shap_vals[1]  # class 1 (unstable)
-        top5_idx = np.argsort(np.abs(shap_vals))[::-1][:5]
-        shap_top5 = [
-            {
-                "feature":    FEATURE_COLS[i],
-                "value":      float(X.iloc[0, i]),
-                "shap_value": float(shap_vals[i]),
-            }
-            for i in top5_idx
-        ]
+        # SHAP — skipped gracefully if explainer failed to initialise
+        shap_top5 = []
+        if self._shap_explainer_cls is not None:
+            try:
+                shap_vals = self._shap_explainer_cls.shap_values(X_scaled)[0]
+                if isinstance(shap_vals, list):
+                    shap_vals = shap_vals[1]  # class 1 (unstable)
+                top5_idx = np.argsort(np.abs(shap_vals))[::-1][:5]
+                shap_top5 = [
+                    {
+                        "feature":    FEATURE_COLS[i],
+                        "value":      float(X.iloc[0, i]),
+                        "shap_value": float(shap_vals[i]),
+                    }
+                    for i in top5_idx
+                ]
+            except Exception as e:
+                logger.debug(f"SHAP inference skipped: {e}")
 
         # Health score (0=worst, 100=best)
         # Maps prob_unstable ∈ [0,1] → health ∈ [100,0]

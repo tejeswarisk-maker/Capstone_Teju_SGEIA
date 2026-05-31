@@ -68,11 +68,7 @@ button{cursor:pointer;font-family:inherit}
 .ch{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px}
 .ct{font-size:15px;font-weight:600}
 .cs{font-size:12px;color:var(--text2);margin-top:2px}
-.cbtn{width:32px;height:32px;border-radius:50%;border:1.5px solid #cbd5e1;
-  background:transparent;display:flex;align-items:center;justify-content:center;
-  color:var(--accent);flex-shrink:0;transition:all .2s;}
-.cbtn:hover{background:#eff6ff;border-color:var(--accent)}
-[data-theme="dark"] .cbtn:hover{background:#1e3a5f}
+.cbtn{display:none}
 /* ── Gauge ────────────────────────────────────────────────────────────── */
 .gauge-wrap{display:flex;align-items:center;gap:24px}
 .gauge-ring{position:relative;width:120px;height:120px;flex-shrink:0}
@@ -244,6 +240,25 @@ button{cursor:pointer;font-family:inherit}
   border:none;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .2s;}
 .send-btn:hover{background:var(--accent-h)}
 .chat-hint{font-size:11px;color:var(--text3);text-align:center;margin-top:6px}
+/* ── RAG Pipeline Steps ───────────────────────────────────────────────── */
+.rag-pipeline{padding:12px 14px;min-width:280px;max-width:420px}
+.rag-header{font-size:12px;font-weight:700;color:var(--accent);margin-bottom:10px;
+  display:flex;align-items:center;gap:6px}
+.rag-step{display:grid;grid-template-columns:20px 1fr auto auto;
+  align-items:start;gap:4px 8px;padding:6px 0;
+  border-bottom:1px solid var(--border);font-size:12px}
+.rag-step:last-child{border-bottom:none}
+.rag-icon{font-size:14px;line-height:1.4}
+.rag-label{font-weight:600;color:var(--text);font-size:12px}
+.rag-status{font-size:11px;opacity:.8}
+.rag-count{font-size:11px;color:var(--accent);font-weight:600;
+  background:#eff6ff;padding:1px 6px;border-radius:10px}
+[data-theme="dark"] .rag-count{background:#1e3a5f}
+.rag-detail{grid-column:2/-1;font-size:11px;color:var(--text2);
+  line-height:1.4;margin-top:2px}
+.rag-running .rag-label{color:var(--accent)}
+.rag-done .rag-label{color:var(--text)}
+
 /* ── Scrollbar ────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar{width:5px;height:5px}
 ::-webkit-scrollbar-track{background:transparent}
@@ -482,9 +497,8 @@ button{cursor:pointer;font-family:inherit}
         </button>
       </div>
 
-      <div class="ctx-banner">
+      <div class="ctx-banner" style="padding:8px 16px;">
         <div class="ctx-pill" id="ctx-pill">Context</div>
-        <div class="ctx-desc" id="ctx-desc"></div>
       </div>
 
       <div class="chat-msgs" id="chat-msgs">
@@ -874,8 +888,7 @@ function openChat(type,title,desc,extraMetrics){
   curWidget={type,title,desc,extraMetrics};
   $('chat-title').textContent=title;
   $('chat-subtitle').textContent='Context: '+title;
-  $('ctx-pill').textContent=(type==='general'?'🌐 All Widgets':'📌 Widget: ')+title;
-  $('ctx-desc').textContent=desc;
+  $('ctx-pill').textContent='🌐 General Chat — All Widgets';
   const ph = type==='general' ? 'Compare zones, incidents, stability… ask anything.' : 'Ask about '+title+'…';
   $('empty-lbl').textContent= type==='general'
     ? 'Ask anything across all 12 widgets. Full dashboard context is attached.'
@@ -900,13 +913,9 @@ function renderThreadList(){
   const scopeLabel=isGeneral
     ? '🌐 All Widgets'
     : '📌 '+curWidget.title;
-  const scopeNote=isGeneral
-    ? 'Questions here cover all dashboard widgets.'
-    : 'Questions here are scoped to this widget only.';
   $('thread-list').innerHTML=`
     <div style="padding:6px 8px 10px;border-bottom:1px solid var(--border);margin-bottom:8px;">
-      <div style="font-size:11px;font-weight:700;color:var(--accent);margin-bottom:2px;">${scopeLabel}</div>
-      <div style="font-size:10px;color:var(--text3);line-height:1.4;">${scopeNote}</div>
+      <div style="font-size:11px;font-weight:700;color:var(--accent);">${scopeLabel}</div>
     </div>
     ${t.length?`<div class="t-item active">${isGeneral?'General conversation':'This widget'} · ${t.filter(m=>m.role==='user').length} message${t.filter(m=>m.role==='user').length===1?'':'s'}</div>`:'<div style="font-size:11px;color:var(--text3);padding:4px 8px;">No messages yet</div>'}
   `;
@@ -1316,6 +1325,20 @@ To get deeper analysis on a specific area, try asking: "Why are there so many cr
   return null; // fall through to API
 }
 
+// ── Pipeline step renderer ─────────────────────────────────────────────────
+function _renderStep(step){
+  const icons={load_kb:'📂',chunk:'✂️',embed:'🔢',bm25_search:'🔍',
+               chroma_search:'🧠',fuse:'⚗️',stability:'📊',ds2:'⚡',llm:'🤖'};
+  const statusIcon = step.status==='done' ? '✅' : step.status==='running' ? '⏳' : '';
+  return `<div class="rag-step rag-${step.status||'done'}">
+    <span class="rag-icon">${icons[step.step]||'⚙️'}</span>
+    <span class="rag-label">${step.label}</span>
+    <span class="rag-status">${statusIcon}</span>
+    ${step.count!=null?`<span class="rag-count">${step.count} results</span>`:''}
+    <div class="rag-detail">${esc(step.text||'')}</div>
+  </div>`;
+}
+
 async function sendMsg(){
   const inp=$('chat-inp');
   const query=inp.value.trim();
@@ -1328,49 +1351,97 @@ async function sendMsg(){
 
   const box=$('chat-msgs');
   $('chat-empty').style.display='none';
-  const dot=document.createElement('div');
-  dot.className='msg ma';dot.id='typing-indicator';
-  dot.innerHTML='<div class="msg-bbl"><div class="typing"><span></span><span></span><span></span></div></div>';
-  box.appendChild(dot);box.scrollTop=box.scrollHeight;
 
-  // ── Always call LLM first — it understands context and gives proper analysis ─
-  // Local patterns are ONLY used when the API is completely unreachable.
+  // Pipeline steps container — shown live as SSE events arrive
+  const pipelineDiv = document.createElement('div');
+  pipelineDiv.className = 'msg ma';
+  pipelineDiv.id = 'pipeline-steps';
+  pipelineDiv.innerHTML = '<div class="msg-bbl rag-pipeline"><div class="rag-header">🔄 RAG Pipeline Running…</div><div id="rag-steps"></div></div>';
+  box.appendChild(pipelineDiv);
+  box.scrollTop = box.scrollHeight;
+
+  const stepsEl = document.getElementById('rag-steps');
+  const stepMap = {}; // track steps by key so we can update in-place
+
   const ctx = curWidget ? {
     type:        curWidget.type,
     title:       curWidget.title,
     description: curWidget.desc,
-    metrics:     curWidget.type === 'general'
-                   ? (curWidget.extraMetrics || buildDashboardSnapshot())
+    metrics:     curWidget.type==='general'
+                   ? (curWidget.extraMetrics||buildDashboardSnapshot())
                    : _widgetMetrics(curWidget.type),
   } : null;
 
-  let answered = false;
   try {
-    const res = await fetch(`${API}/api/chat/fast`, {
+    const res = await fetch(`${API}/api/chat/rag`, {
       method:  'POST',
-      headers: {'Content-Type': 'application/json'},
-      body:    JSON.stringify({query, widget_context: ctx, session_id: type}),
-      signal:  AbortSignal.timeout(35000),
+      headers: {'Content-Type':'application/json'},
+      body:    JSON.stringify({query, widget_context:ctx, session_id:type}),
     });
-    dot.remove();
-    answered = true;
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    const reply = data.final_response || data.detail || '';
-    if (!reply || reply.includes('unavailable') || reply.includes('error processing')) {
-      // LLM returned but gave an error message — fall through to local
-      throw new Error('LLM returned error response');
+
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while(true){
+      const {done, value} = await reader.read();
+      if(done) break;
+      buf += decoder.decode(value, {stream:true});
+
+      // Parse SSE events from buffer
+      const parts = buf.split('\n\n');
+      buf = parts.pop(); // keep incomplete chunk
+
+      for(const part of parts){
+        if(!part.trim()) continue;
+        let eventType = 'message', dataStr = '';
+        for(const line of part.split('\n')){
+          if(line.startsWith('event:')) eventType = line.slice(6).trim();
+          if(line.startsWith('data:'))  dataStr   = line.slice(5).trim();
+        }
+        if(!dataStr) continue;
+        let payload;
+        try{ payload = JSON.parse(dataStr); } catch{ continue; }
+
+        if(eventType === 'step'){
+          // Render pipeline step — update in-place if already shown
+          if(!stepMap[payload.step]){
+            const stepEl = document.createElement('div');
+            stepEl.id = `step-${payload.step}`;
+            stepEl.innerHTML = _renderStep(payload);
+            stepsEl.appendChild(stepEl);
+            stepMap[payload.step] = stepEl;
+          } else {
+            stepMap[payload.step].innerHTML = _renderStep(payload);
+          }
+          box.scrollTop = box.scrollHeight;
+        }
+        else if(eventType === 'answer'){
+          // Remove pipeline steps, show final answer
+          pipelineDiv.remove();
+          const answer = payload.answer||'No response.';
+          threads[type].push({role:'ai', content:answer, time:fmtT()});
+          renderMsgs(threads[type]);
+        }
+        else if(eventType === 'error'){
+          pipelineDiv.remove();
+          const errMsg = `⚠️ Pipeline error: ${payload.error||'Unknown error'}`;
+          threads[type].push({role:'ai', content:errMsg, time:fmtT()});
+          renderMsgs(threads[type]);
+        }
+      }
     }
-    threads[type].push({role:'ai', content: reply, time: fmtT()});
   } catch(e) {
-    if (!answered) dot.remove();
-    // LLM unreachable — use rich local analysis engine as fallback
+    pipelineDiv.remove();
+    // Full offline fallback
     const fallback = _localAnswer(query, type)
                   || _localAnswer(query, 'general')
-                  || `**Grid Status** (AI backend offline)\n\nHealth: **${Math.round(100-((dash.stability_summary||{}).unstable_pct??18.3))}/100** | Incidents: **${(dash.incident_counts||{}).total||0}** | Frequency: **${+((dash.stability_summary||{}).mean_freq_hz??49.92).toFixed(2)} Hz**\n\nTry asking: "why is health low", "compare zones", or "what actions should I take" for detailed analysis.`;
-    threads[type].push({role:'ai', content: fallback, time: fmtT()});
+                  || `**Backend offline.** Health: **${Math.round(100-((dash.stability_summary||{}).unstable_pct??18.3))}/100** | Ask "why is health low" or "compare zones" for analysis.`;
+    threads[type].push({role:'ai', content:fallback, time:fmtT()});
+    renderMsgs(threads[type]);
   }
-  renderMsgs(threads[type]);
 }
 
 // Returns only the data slice relevant to a single widget type.
