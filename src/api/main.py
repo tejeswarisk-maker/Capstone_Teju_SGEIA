@@ -1301,12 +1301,38 @@ async def stability_check(request: StabilityCheckRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Module-level cache for incident CSV (loaded once, never re-read) ──────────
+_incidents_cache: dict = {}
+
+def _load_incidents_cache():
+    """Load incident CSV once into memory at startup."""
+    global _incidents_cache
+    if _incidents_cache:
+        return _incidents_cache
+    if INCIDENTS_CSV.exists():
+        import pandas as pd
+        df = pd.read_csv(INCIDENTS_CSV)
+        _incidents_cache = {
+            "severity":  df["severity"].value_counts().to_dict(),
+            "outage":    df["outage_event"].value_counts().to_dict(),
+            "region":    df["region"].value_counts().to_dict(),
+            "total":     len(df),
+        }
+    return _incidents_cache
+
+# Pre-load on import so first request is instant
+try:
+    _load_incidents_cache()
+except Exception:
+    pass
+
+
 @app.get("/api/dashboard/metrics", tags=["Dashboard"])
 async def dashboard_metrics():
     """
     Aggregated KPI metrics for the dashboard.
-    Combines static incident corpus with LIVE simulated telemetry variation
-    so health score, frequency, and zone counts change on every refresh.
+    Incidents loaded from cache (no CSV read on each call).
+    Stability from live telemetry buffer or fast DS1 fallback.
     """
     import pandas as pd
     import math
@@ -1320,41 +1346,24 @@ async def dashboard_metrics():
 
     metrics: Dict[str, Any] = {}
 
-    # ── Incident counts — base from CSV + small live fluctuation ─────────────
-    if INCIDENTS_CSV.exists():
-        df = pd.read_csv(INCIDENTS_CSV)
-        base_counts = df["severity"].value_counts().to_dict()
-        base_total  = len(df)
+    # ── Incident counts — from in-memory cache (no CSV read) ─────────────────
+    cache = _load_incidents_cache()
+    if cache:
+        base_counts = cache["severity"]
+        base_od     = cache["outage"]
+        base_rd     = cache["region"]
 
-        # Live fluctuation: ±0–3 incidents per severity per refresh window
-        delta_c = rng.randint(-2, 3)
-        delta_h = rng.randint(-3, 4)
-        delta_m = rng.randint(-2, 3)
-        delta_l = rng.randint(-4, 5)
+        delta_c = rng.randint(-2, 3); delta_h = rng.randint(-3, 4)
+        delta_m = rng.randint(-2, 3); delta_l = rng.randint(-4, 5)
 
-        live_c = max(0, base_counts.get("critical", 3) + delta_c)
-        live_h = max(0, base_counts.get("high",     11) + delta_h)
-        live_m = max(0, base_counts.get("medium",   24) + delta_m)
-        live_l = max(0, base_counts.get("low",      47) + delta_l)
+        live_c = max(0, base_counts.get("critical", 3)  + delta_c)
+        live_h = max(0, base_counts.get("high",    11)  + delta_h)
+        live_m = max(0, base_counts.get("medium",  24)  + delta_m)
+        live_l = max(0, base_counts.get("low",     47)  + delta_l)
 
-        metrics["incident_counts"] = {
-            "critical": live_c,
-            "high":     live_h,
-            "medium":   live_m,
-            "low":      live_l,
-            "total":    live_c + live_h + live_m + live_l,
-        }
-
-        # Zone distribution — shift incidents between zones each refresh
-        base_od = df["outage_event"].value_counts().to_dict()
-        base_rd = df["region"].value_counts().to_dict()
-        # Small zone fluctuations
-        metrics["outage_distribution"] = {
-            k: max(0, v + rng.randint(-2, 2)) for k, v in base_od.items()
-        }
-        metrics["region_distribution"] = {
-            k: max(0, v + rng.randint(-2, 3)) for k, v in base_rd.items()
-        }
+        metrics["incident_counts"]    = {"critical":live_c,"high":live_h,"medium":live_m,"low":live_l,"total":live_c+live_h+live_m+live_l}
+        metrics["outage_distribution"]= {k: max(0, v+rng.randint(-2,2)) for k,v in base_od.items()}
+        metrics["region_distribution"]= {k: max(0, v+rng.randint(-2,3)) for k,v in base_rd.items()}
     else:
         metrics["incident_counts"] = {}
 
@@ -1383,17 +1392,12 @@ async def dashboard_metrics():
         logger.info(f"Dashboard metrics from live telemetry (n={live_summary['buffer_size']})")
     else:
         # Fallback: DS1 static + sinusoidal variation (while simulator warms up)
-        base_unstable_pct, base_freq_hz = 63.8, 49.992
-        base_stab_p25, base_stab_p75    = -0.0213, 0.0634
-        if DS1_AUGMENTED.exists():
-            try:
-                ds1 = pd.read_csv(DS1_AUGMENTED, usecols=["stabf","stab","grid_frequency"])
-                base_unstable_pct = round(float((ds1["stabf"]=="unstable").mean()*100),1)
-                base_freq_hz      = round(float(ds1["grid_frequency"].mean()),4)
-                base_stab_p25     = round(float(ds1["stab"].quantile(0.25)),4)
-                base_stab_p75     = round(float(ds1["stab"].quantile(0.75)),4)
-            except Exception:
-                pass
+        # Pre-computed DS1 stats (63.8% unstable, mean freq 50.017 Hz)
+        # Avoids reading 60K-row CSV on every dashboard refresh
+        base_unstable_pct = 63.8
+        base_freq_hz      = 50.017
+        base_stab_p25     = -0.0213
+        base_stab_p75     =  0.0634
         t_min = (now % 1200)/1200
         sine  = math.sin(2*math.pi*t_min)
         metrics["stability_summary"] = {
