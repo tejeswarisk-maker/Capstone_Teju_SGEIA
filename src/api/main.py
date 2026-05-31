@@ -17,6 +17,8 @@ import json
 import re
 import time
 import uuid
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
@@ -382,13 +384,20 @@ Rules:
         return response.content.strip()
 
     async def _call_groq() -> str:
-        """Groq free tier — llama-3.3-70b-versatile, ~2s response, high quality."""
-        groq_key = settings.groq_api_key
+        """Groq free tier — tries multiple models, ~1-3s response."""
+        import os as _os
+        groq_key = settings.groq_api_key or _os.environ.get("GROQ_API_KEY", "")
         if not groq_key:
             raise RuntimeError("Groq key not configured")
-        async with httpx.AsyncClient(timeout=25.0) as client:
-            # Try best model first, fall back to faster one
-            for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+        # Model priority: best quality first, fastest last
+        groq_models = [
+            "llama-3.1-8b-instant",     # confirmed working
+            "llama-3.3-70b-versatile",  # may work if available
+            "mixtral-8x7b-32768",
+        ]
+        async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+            last_err = None
+            for model in groq_models:
                 try:
                     resp = await client.post(
                         "https://api.groq.com/openai/v1/chat/completions",
@@ -400,15 +409,25 @@ Rules:
                                 {"role": "user",   "content": request.query},
                             ],
                             "temperature": 0.3,
-                            "max_tokens": 500,
+                            "max_tokens": 600,
                         },
                     )
-                    resp.raise_for_status()
-                    logger.info(f"[{request_id}] Groq answered via {model}")
-                    return resp.json()["choices"][0]["message"]["content"].strip()
-                except Exception:
+                    if resp.status_code == 200:
+                        logger.info(f"[{request_id}] Groq answered via {model}")
+                        return resp.json()["choices"][0]["message"]["content"].strip()
+                    else:
+                        last_err = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                        logger.warning(f"[{request_id}] Groq model {model} failed: {last_err}")
+                        if resp.status_code == 401:
+                            raise RuntimeError(f"Groq auth failed: {resp.text[:200]}")
+                        continue
+                except RuntimeError:
+                    raise
+                except Exception as e:
+                    last_err = str(e)
+                    logger.warning(f"[{request_id}] Groq model {model} error: {e}")
                     continue
-            raise RuntimeError("All Groq models failed")
+            raise RuntimeError(f"All Groq models failed. Last error: {last_err}")
 
     answer = ""
     for attempt_name, attempt_fn in [
@@ -964,36 +983,51 @@ You have access to TWO datasets and a 200-incident knowledge base — use ALL re
 - Format with **bold** headers and clear structure
 - 200-400 words unless the question asks for a detailed list"""
 
-            # Try LLM providers
+            # ── Call LLM — Groq first (confirmed working), Prodapt fallback ──────
+            import os as _os
             llm_answer = ""
-            async def _call_llm(url, headers, body_d, timeout=20.0, verify=True):
-                async with httpx.AsyncClient(timeout=timeout, verify=verify) as c:
-                    r = await c.post(url, headers=headers, json=body_d)
-                    r.raise_for_status()
-                    return r.json()["choices"][0]["message"]["content"].strip()
+            msgs       = [{"role":"system","content":system_prompt}, {"role":"user","content":request.query}]
+            groq_key   = settings.groq_api_key or _os.environ.get("GROQ_API_KEY","")
 
-            msgs = [{"role":"system","content":system_prompt}, {"role":"user","content":request.query}]
-            base_body = {"messages": msgs, "temperature": 0.3, "max_tokens": 600}
-
-            for provider, url, hdrs, mdl, extra in [
-                ("Prodapt", f"{settings.openai_base_url}/chat/completions",
-                 {"Authorization":f"Bearer {settings.openai_api_key}","Content-Type":"application/json"},
-                 settings.openai_model_simple, {"verify": False}),
-                ("Groq", "https://api.groq.com/openai/v1/chat/completions",
-                 {"Authorization":f"Bearer {settings.groq_api_key}","Content-Type":"application/json"},
-                 "llama-3.3-70b-versatile", {}),
-            ]:
-                if provider == "Groq" and not settings.groq_api_key:
-                    continue
+            # 1. Groq — llama-3.1-8b-instant (confirmed working)
+            if groq_key and not llm_answer:
                 try:
-                    llm_answer = await _call_llm(
-                        url, hdrs, {**base_body, "model": mdl},
-                        timeout=25.0, **extra
-                    )
-                    logger.info(f"[{request_id}] LLM answered via {provider}")
-                    break
-                except Exception as e:
-                    logger.warning(f"[{request_id}] {provider} failed: {e}")
+                    async with httpx.AsyncClient(timeout=30.0, verify=False) as _c:
+                        _r = await _c.post(
+                            "https://api.groq.com/openai/v1/chat/completions",
+                            headers={"Authorization": f"Bearer {groq_key}",
+                                     "Content-Type": "application/json"},
+                            json={"model": "llama-3.1-8b-instant",
+                                  "messages": msgs,
+                                  "temperature": 0.3, "max_tokens": 600},
+                        )
+                        if _r.status_code == 200:
+                            llm_answer = _r.json()["choices"][0]["message"]["content"].strip()
+                            logger.info(f"[{request_id}] Groq answered")
+                        else:
+                            logger.warning(f"[{request_id}] Groq HTTP {_r.status_code}: {_r.text[:200]}")
+                except Exception as _e:
+                    logger.warning(f"[{request_id}] Groq error: {_e}")
+
+            # 2. Prodapt gateway fallback
+            if not llm_answer:
+                try:
+                    async with httpx.AsyncClient(timeout=20.0, verify=False) as _c:
+                        _r = await _c.post(
+                            f"{settings.openai_base_url}/chat/completions",
+                            headers={"Authorization": f"Bearer {settings.openai_api_key}",
+                                     "Content-Type": "application/json"},
+                            json={"model": settings.openai_model_simple,
+                                  "messages": msgs,
+                                  "temperature": 0.3, "max_tokens": 600},
+                        )
+                        if _r.status_code == 200:
+                            llm_answer = _r.json()["choices"][0]["message"]["content"].strip()
+                            logger.info(f"[{request_id}] Prodapt answered")
+                        else:
+                            logger.warning(f"[{request_id}] Prodapt HTTP {_r.status_code}")
+                except Exception as _e:
+                    logger.warning(f"[{request_id}] Prodapt error: {_e}")
 
             yield _sse_event({
                 "step": "llm",
@@ -1352,6 +1386,35 @@ async def dashboard_metrics():
     metrics["next_refresh_in"] = 60 - int(now % 60)
 
     return metrics
+
+
+@app.get("/api/test/groq", tags=["Debug"])
+async def test_groq():
+    """Quick Groq connectivity test — open in browser to diagnose LLM issues."""
+    import os as _os
+    groq_key = settings.groq_api_key or _os.environ.get("GROQ_API_KEY","")
+    if not groq_key:
+        return {"error": "GROQ_API_KEY not set in .env"}
+
+    results = {}
+    models = ["llama-3.1-8b-instant","llama-3.3-70b-versatile","mixtral-8x7b-32768"]
+    async with __import__("httpx").AsyncClient(timeout=15.0, verify=False) as c:
+        for model in models:
+            try:
+                r = await c.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                    json={"model": model, "messages": [{"role":"user","content":"Reply with just: OK"}], "max_tokens": 5},
+                )
+                if r.status_code == 200:
+                    results[model] = {"status": "✅ OK", "reply": r.json()["choices"][0]["message"]["content"]}
+                else:
+                    results[model] = {"status": f"❌ HTTP {r.status_code}", "error": r.text[:200]}
+            except Exception as e:
+                results[model] = {"status": "❌ Exception", "error": str(e)[:200]}
+
+    working = [m for m,v in results.items() if "✅" in v["status"]]
+    return {"groq_key_prefix": groq_key[:12]+"...", "results": results, "working_models": working}
 
 
 @app.get("/api/telemetry/live", tags=["Telemetry"])

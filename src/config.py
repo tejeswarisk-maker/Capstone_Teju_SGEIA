@@ -31,8 +31,8 @@ class Settings(BaseSettings):
 
     # ── Groq (free fallback tier 2) ───────────────────────────────────────────
     groq_api_key: str = ""
-    groq_model_complex: str = "llama-3.1-70b-versatile"
-    groq_model_simple: str = "llama-3.1-8b-instant"
+    groq_model_complex: str = "llama-3.1-8b-instant"
+    groq_model_simple: str  = "llama-3.1-8b-instant"
 
     # ── Fallback embeddings (local, no API) ───────────────────────────────────
     local_embedding_model: str = "all-MiniLM-L6-v2"
