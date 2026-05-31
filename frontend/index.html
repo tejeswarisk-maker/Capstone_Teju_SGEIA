@@ -270,9 +270,8 @@ button{cursor:pointer;font-family:inherit}
 @keyframes splashpulse{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
 .splash-title{color:#fff;font-size:22px;font-weight:700;letter-spacing:.5px}
 .splash-sub{color:rgba(255,255,255,.65);font-size:13px}
-.splash-bar{width:180px;height:3px;background:rgba(255,255,255,.2);border-radius:4px;overflow:hidden;margin-top:8px}
-.splash-fill{height:100%;background:#fff;border-radius:4px;animation:splashload 1.8s ease-in-out forwards}
-@keyframes splashload{0%{width:0%}60%{width:75%}100%{width:100%}}
+.splash-bar{width:220px;height:3px;background:rgba(255,255,255,.2);border-radius:4px;overflow:hidden;margin-top:8px}
+.splash-fill{height:100%;width:0%;background:#fff;border-radius:4px;transition:width .4s ease;}
 </style>
 </head>
 <body>
@@ -1585,12 +1584,17 @@ $('chat-inp').addEventListener('input',function(){
 
 // ── Init ───────────────────────────────────────────────────────────────────
 (async function(){
-  // Do NOT pre-render with demo data — avoids score flicker (82→36).
-  // Show loading placeholders until the API responds.
   $('health-val').textContent='…';
-  await checkHealth();
-  await loadMetrics(); // sets dashLoaded=true on success, renders once with real data
-  setInterval(()=>{checkHealth();loadMetrics();},30000); // refresh every 30s
+
+  // Slowly fill the splash bar as each step completes
+  const fill = document.querySelector('.splash-fill');
+  const setBar = pct => { if(fill) fill.style.width = pct + '%'; };
+
+  setBar(10);
+  await checkHealth();   setBar(40);
+  await loadMetrics();   setBar(100); // loadMetrics hides splash when done
+
+  setInterval(()=>{checkHealth();loadMetrics();},30000);
   setInterval(renderAgentFeed,8000);
 })();
 </script>
