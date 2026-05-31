@@ -262,6 +262,7 @@ button{cursor:pointer;font-family:inherit}
   <div class="hdr-gap"></div>
   <div class="hdr-right">
     <div class="live-badge">Live telemetry</div>
+    <div style="font-size:12px;color:var(--text2)" id="last-updated-lbl">Refreshing…</div>
     <div class="agents-badge">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
       <span id="agents-txt">5 agents online</span>
@@ -561,12 +562,24 @@ async function loadMetrics(){
     if(!r.ok)throw new Error();
     dash=await r.json();
     dashLoaded=true;
+    const t=new Date();
+    $('last-updated-lbl').textContent=`Updated ${t.getHours().toString().padStart(2,'0')}:${t.getMinutes().toString().padStart(2,'0')}:${t.getSeconds().toString().padStart(2,'0')}`;
   }catch{
     // Only use fallback if we've never loaded real data — avoids flipping health score
     if(!dashLoaded) dash=FALLBACK_DASH;
+    $('last-updated-lbl').textContent=`API offline — cached data`;
   }
   renderAll();
 }
+
+// Countdown ticker — shows "Next refresh in Xs" between API calls
+let _refreshCountdown=60;
+setInterval(()=>{
+  _refreshCountdown=Math.max(0,_refreshCountdown-1);
+  if(_refreshCountdown>0&&dashLoaded){
+    $('last-updated-lbl').textContent=($('last-updated-lbl').textContent.split('·')[0]||'').trim()+` · next in ${_refreshCountdown}s`;
+  }
+},1000);
 
 function renderAll(){
   renderIncidents();renderGauge();renderZones();
@@ -1320,39 +1333,42 @@ async function sendMsg(){
   dot.innerHTML='<div class="msg-bbl"><div class="typing"><span></span><span></span><span></span></div></div>';
   box.appendChild(dot);box.scrollTop=box.scrollHeight;
 
-  // ── Try instant local answer first (no network, instant) ──────────────────
-  const local=_localAnswer(query, type);
-  if(local){
-    await new Promise(r=>setTimeout(r,180)); // tiny delay so typing indicator shows
-    dot.remove();
-    threads[type].push({role:'ai',content:local,time:fmtT()});
-    renderMsgs(threads[type]);
-    return;
-  }
+  // ── Always call LLM first — it understands context and gives proper analysis ─
+  // Local patterns are ONLY used when the API is completely unreachable.
+  const ctx = curWidget ? {
+    type:        curWidget.type,
+    title:       curWidget.title,
+    description: curWidget.desc,
+    metrics:     curWidget.type === 'general'
+                   ? (curWidget.extraMetrics || buildDashboardSnapshot())
+                   : _widgetMetrics(curWidget.type),
+  } : null;
 
-  // ── Fall back to API for complex / open-ended questions ───────────────────
-  const ctx=curWidget?{
-    type:curWidget.type,
-    title:curWidget.title,
-    description:curWidget.desc,
-    metrics: curWidget.type==='general'
-      ? (curWidget.extraMetrics || buildDashboardSnapshot())
-      : _widgetMetrics(curWidget.type),
-  }:null;
-  try{
-    const res=await fetch(`${API}/api/chat/fast`,{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({query,widget_context:ctx,session_id:type}),
-      signal:AbortSignal.timeout(30000),
+  let answered = false;
+  try {
+    const res = await fetch(`${API}/api/chat/fast`, {
+      method:  'POST',
+      headers: {'Content-Type': 'application/json'},
+      body:    JSON.stringify({query, widget_context: ctx, session_id: type}),
+      signal:  AbortSignal.timeout(35000),
     });
     dot.remove();
-    const data=await res.json();
-    threads[type].push({role:'ai',content:data.final_response||data.detail||'No response.',time:fmtT()});
-  }catch(e){
-    dot.remove();
-    // Always answer from local data — never show raw error to user
-    const fallback = _localAnswer(query, type) || _localAnswer(query, 'general') || _localAnswer(query+'why cause explain', 'general');
-    threads[type].push({role:'ai', content: fallback||`**Grid Status Summary**\n\nHealth: **${Math.round(100-((dash.stability_summary||{}).unstable_pct??18.3))}/100**, Incidents: **${(dash.incident_counts||{}).total||0}**, Frequency: **${+((dash.stability_summary||{}).mean_freq_hz??49.92).toFixed(2)} Hz**.\n\nAsk "why is health low", "what is causing incidents", or "compare zones" for detailed analysis.`, time:fmtT()});
+    answered = true;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const reply = data.final_response || data.detail || '';
+    if (!reply || reply.includes('unavailable') || reply.includes('error processing')) {
+      // LLM returned but gave an error message — fall through to local
+      throw new Error('LLM returned error response');
+    }
+    threads[type].push({role:'ai', content: reply, time: fmtT()});
+  } catch(e) {
+    if (!answered) dot.remove();
+    // LLM unreachable — use rich local analysis engine as fallback
+    const fallback = _localAnswer(query, type)
+                  || _localAnswer(query, 'general')
+                  || `**Grid Status** (AI backend offline)\n\nHealth: **${Math.round(100-((dash.stability_summary||{}).unstable_pct??18.3))}/100** | Incidents: **${(dash.incident_counts||{}).total||0}** | Frequency: **${+((dash.stability_summary||{}).mean_freq_hz??49.92).toFixed(2)} Hz**\n\nTry asking: "why is health low", "compare zones", or "what actions should I take" for detailed analysis.`;
+    threads[type].push({role:'ai', content: fallback, time: fmtT()});
   }
   renderMsgs(threads[type]);
 }
@@ -1406,7 +1422,7 @@ $('chat-inp').addEventListener('input',function(){
   $('health-val').textContent='…';
   await checkHealth();
   await loadMetrics(); // sets dashLoaded=true on success, renders once with real data
-  setInterval(()=>{checkHealth();loadMetrics();},60000);
+  setInterval(()=>{checkHealth();loadMetrics();_refreshCountdown=60;},60000);
   setInterval(renderAgentFeed,8000);
 })();
 </script>

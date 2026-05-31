@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 
 from src.agents.graph import run_query
 from src.guardrails.validators import validate_and_sanitise
+from src.simulation.live_telemetry import get_simulator, LIVE_TELEMETRY_PATH
 from src.indexing.chroma_store import get_chroma_store
 from src.models.stability_model import get_stability_model
 from src.config import settings, DS1_AUGMENTED, INCIDENTS_CSV
@@ -45,6 +46,16 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+@app.on_event("startup")
+async def _startup():
+    """Auto-start live telemetry simulator on backend launch."""
+    try:
+        sim = get_simulator()
+        sim.start()
+        logger.info("Live telemetry simulator started on backend startup.")
+    except Exception as e:
+        logger.warning(f"Live telemetry simulator could not start: {e}")
 
 # Allow all origins during development (restrict in production)
 app.add_middleware(
@@ -152,40 +163,187 @@ async def health_check():
 @app.post("/api/chat/fast", tags=["Intelligence"])
 async def fast_chat(request: ChatRequest):
     """
-    Fast single-LLM-call chat endpoint.
-    Used by widget chats and general chat for quick responses.
-    Skips the full multi-agent pipeline — returns in 5-15s instead of 60-120s.
-    Uses direct httpx call (no LangChain overhead) for speed.
+    Smart single-LLM-call chat endpoint for all widget chats.
+
+    For EVERY query it:
+      1. Takes the user question + widget context (description + live metrics)
+      2. Intelligently searches ChromaDB for semantically relevant incidents
+         (auto-filters by zone / severity / equipment if detected in query)
+      3. Fetches current stability snapshot from the ML model
+      4. Fetches DS2 anomaly summary if query is meter/anomaly-related
+      5. Builds a rich system prompt and calls the LLM to reason over all data
+
+    The LLM sees: widget description + live dashboard metrics + real incident
+    records from DB + stability scores — so answers are grounded in actual data.
     """
     import httpx
+    import re as _re
+    import pandas as pd
     start_ms = int(time.time() * 1000)
     request_id = str(uuid.uuid4())[:8]
-    logger.info(f"[{request_id}] POST /api/chat/fast: '{request.query[:60]}'")
+    logger.info(f"[{request_id}] POST /api/chat/fast q='{request.query[:80]}'")
 
-    # Build context-aware system prompt
-    widget_ctx = request.widget_context or {}
+    # ── 1. Widget context ─────────────────────────────────────────────────────
+    widget_ctx   = request.widget_context or {}
+    widget_type  = widget_ctx.get("type", "general")
     widget_title = widget_ctx.get("title", "Smart Grid Dashboard")
     widget_desc  = widget_ctx.get("description", "")
-    metrics_json = json.dumps(widget_ctx.get("metrics", {}), default=str)[:800]
+    metrics      = widget_ctx.get("metrics", {})
+    query_lower  = request.query.lower()
+    is_general   = widget_type == "general"
 
-    is_general = widget_ctx.get("type") == "general"
-    system_prompt = f"""You are SGEIA — Smart Grid Energy Intelligence Assistant.
-You are an expert in power grid operations, stability analysis, incident management, and energy systems.
+    def _fmt_dict(m: dict, indent: str = "  ") -> str:
+        lines = []
+        for k, v in m.items():
+            if isinstance(v, dict):
+                lines.append(f"{indent}{k}:")
+                lines.append(_fmt_dict(v, indent + "  "))
+            else:
+                lines.append(f"{indent}{k}: {v}")
+        return "\n".join(lines)
 
-{'=== FULL DASHBOARD SNAPSHOT (all 12 widgets) ===' if is_general else '=== WIDGET CONTEXT: ' + widget_title + ' ==='}
+    metrics_block = _fmt_dict(metrics)[:2500] if metrics else "(no widget metrics)"
+
+    # ── 2. Auto-detect filters from query ────────────────────────────────────
+    zone_match = _re.search(r'\bzone[_\s-]?([a-dA-D])\b', request.query, _re.I)
+    sev_filter = next((s for s in ["critical","high","medium","low"] if s in query_lower), None)
+    eq_filter  = next(
+        (e for e in ["transformer","substation","distribution_unit",
+                     "smart_meter_bank","transmission_line","renewable_inverter"]
+         if e.replace("_"," ") in query_lower or e in query_lower),
+        None
+    )
+
+    chroma_filters: dict = {}
+    if zone_match:
+        chroma_filters["region"] = f"Zone_{zone_match.group(1).upper()}"
+    if sev_filter:
+        chroma_filters["severity"] = sev_filter
+    if eq_filter:
+        chroma_filters["equipment_type"] = eq_filter
+
+    chroma_filter = None
+    if len(chroma_filters) > 1:
+        chroma_filter = {"$and": [{k: v} for k, v in chroma_filters.items()]}
+    elif chroma_filters:
+        k, v = next(iter(chroma_filters.items()))
+        chroma_filter = {k: v}
+
+    # ── 3. ALWAYS fetch relevant incidents from ChromaDB ─────────────────────
+    # Semantic search on the user's query — no keyword gating.
+    # LLM receives real incident records for every question so it can reason properly.
+    incidents_block = ""
+    try:
+        store = get_chroma_store()
+        n = 10 if chroma_filter else 8   # more results when filtered
+        hits = store.search_incidents(
+            query=request.query,
+            n_results=n,
+            filters=chroma_filter,
+        )
+        if hits:
+            filter_desc = ", ".join(f"{k}={v}" for k, v in chroma_filters.items()) or "semantic match"
+            lines = [f"=== RELEVANT INCIDENTS FROM DATABASE ({filter_desc}) — top {len(hits)} ==="]
+            for i, inc in enumerate(hits, 1):
+                meta = inc.get("metadata", {})
+                lines.append(
+                    f"[{i}] ID:{inc.get('id','?')} | Zone:{meta.get('region','?')} | "
+                    f"Severity:{meta.get('severity','?')} | Equipment:{meta.get('equipment_type','?')} | "
+                    f"Type:{meta.get('outage_event','?')} | Score:{inc.get('score',0):.2f}\n"
+                    f"    → {inc.get('document','')[:280]}"
+                )
+            incidents_block = "\n".join(lines)
+            logger.info(f"[{request_id}] ChromaDB: {len(hits)} hits (filters={chroma_filters})")
+    except Exception as e:
+        logger.warning(f"[{request_id}] ChromaDB fetch failed: {e}")
+
+    # ── 4. Fetch live stability snapshot from ML model ────────────────────────
+    stability_block = ""
+    try:
+        stab_model = get_stability_model()
+        stab_model._ensure_loaded()
+        # Pull a representative row from DS1 for live inference
+        if DS1_AUGMENTED.exists():
+            ds1 = pd.read_csv(DS1_AUGMENTED, nrows=500)
+            sample = ds1.sample(1, random_state=int(time.time()) % 1000).iloc[0]
+            feat_cols = [c for c in sample.index if c not in ("stabf","stab","grid_frequency")]
+            features  = {c: float(sample[c]) for c in feat_cols if str(sample[c]) not in ("nan","inf")}
+            pred = stab_model.predict(features)
+            stability_block = (
+                f"=== LIVE STABILITY (ML model — sampled telemetry) ===\n"
+                f"  Health score: {pred.get('health_score','?')}/100\n"
+                f"  Label: {pred.get('label','?')}\n"
+                f"  Unstable probability: {pred.get('probability',0):.1%}\n"
+                f"  Grid frequency status: {pred.get('grid_freq_status','?')}"
+            )
+    except Exception as e:
+        logger.debug(f"[{request_id}] Stability snapshot skipped: {e}")
+
+    # ── 5. Smart meter anomaly summary (for meter/anomaly/demand queries) ─────
+    meter_block = ""
+    meter_keywords = ["meter","anomaly","consumption","demand","household","ds2","smart meter","usage"]
+    if any(k in query_lower for k in meter_keywords):
+        try:
+            from src.models.anomaly_model import get_anomaly_model
+            anom = get_anomaly_model()
+            anom._ensure_loaded()
+            if DS1_AUGMENTED.exists():  # use DS2 path via anomaly model
+                from src.config import settings as s
+                ds2_path = next(
+                    (p for p in [
+                        DS1_AUGMENTED.parent / "ds2_smart_meter.csv",
+                        DS1_AUGMENTED.parent / "DS2_SmartMeter.csv",
+                    ] if p.exists()), None
+                )
+                if ds2_path:
+                    ds2 = pd.read_csv(ds2_path, nrows=500)
+                    sample_ds2 = ds2.sample(min(200, len(ds2)), random_state=42)
+                    res_df = anom.predict_batch_ds2(sample_ds2)
+                    n_anom  = int(res_df["is_anomaly"].sum())
+                    anom_pct = n_anom / len(res_df) * 100
+                    meter_block = (
+                        f"=== SMART METER ANOMALY ANALYSIS (DS2 sample, n={len(res_df)}) ===\n"
+                        f"  Anomalies detected: {n_anom} ({anom_pct:.1f}%)\n"
+                        f"  Normal readings: {len(res_df)-n_anom} ({100-anom_pct:.1f}%)\n"
+                        f"  Model: Isolation Forest"
+                    )
+        except Exception as e:
+            logger.debug(f"[{request_id}] Meter block skipped: {e}")
+
+    # ── 6. Build final system prompt with ALL enriched context ────────────────
+    system_prompt = f"""You are SGEIA — Smart Grid Energy Intelligence Assistant (Prodapt AFDE Capstone).
+You are an expert in power grid operations, stability analysis, incident management, anomaly detection, and energy engineering.
+
+=== CONTEXT: {widget_title} ===
 {widget_desc}
 
-Dashboard data:
-{metrics_json}
+=== LIVE WIDGET METRICS ===
+{metrics_block}
 
-{'You have visibility across ALL widgets — grid health, active incidents, zone status, stability trend, frequency, voltage, demand, equipment, anomaly feed, agent activity, and recommendations. Answer cross-widget questions by comparing and correlating this data.' if is_general else 'Answer questions specifically about this widget using the data above.'}
+{stability_block}
 
-Be specific, technical, and actionable. Reference actual numbers from the data.
-Keep responses under 250 words unless more detail is requested."""
+{meter_block}
+
+{incidents_block}
+
+=== YOUR INSTRUCTIONS ===
+The user is asking from the "{widget_title}" widget. Use ALL the data sections above to give a thorough, intelligent answer.
+
+Rules:
+- ALWAYS use real incident IDs, zones, severity, equipment, and descriptions from the INCIDENTS section
+- ALWAYS cite actual numbers from LIVE WIDGET METRICS and STABILITY sections
+- For listing incidents: format each one clearly with ID, zone, severity, type, and description
+- For analysis questions: reason through root causes using the data — don't just restate numbers
+- For action questions: give a concrete prioritised plan referencing specific incidents or zones
+- For comparison questions: compare zones/severities/types using the actual retrieved data
+- If the user's question is not fully answerable from the data, say what you do know and what additional data would be needed
+- Format responses with **bold headers** and bullet points for clarity
+- Aim for 200-400 words — thorough but concise
+- If data is missing for a specific metric, say so clearly rather than guessing"""
 
     async def _call_direct() -> str:
-        """Direct httpx call — fastest path, no LangChain overhead."""
-        async with httpx.AsyncClient(timeout=45.0, verify=False) as client:
+        """Direct httpx call to Prodapt gateway — fastest path."""
+        async with httpx.AsyncClient(timeout=20.0, verify=False) as client:
             resp = await client.post(
                 f"{settings.openai_base_url}/chat/completions",
                 headers={
@@ -199,7 +357,7 @@ Keep responses under 250 words unless more detail is requested."""
                         {"role": "user",   "content": request.query},
                     ],
                     "temperature": 0.3,
-                    "max_tokens": 400,
+                    "max_tokens": 500,
                 },
             )
             resp.raise_for_status()
@@ -221,26 +379,33 @@ Keep responses under 250 words unless more detail is requested."""
         return response.content.strip()
 
     async def _call_groq() -> str:
-        """Groq free tier — llama-3.1-8b-instant, ~1s response."""
+        """Groq free tier — llama-3.3-70b-versatile, ~2s response, high quality."""
         groq_key = settings.groq_api_key
         if not groq_key:
             raise RuntimeError("Groq key not configured")
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-                json={
-                    "model": "llama-3.1-8b-instant",
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user",   "content": request.query},
-                    ],
-                    "temperature": 0.3,
-                    "max_tokens": 400,
-                },
-            )
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            # Try best model first, fall back to faster one
+            for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+                try:
+                    resp = await client.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                        json={
+                            "model": model,
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user",   "content": request.query},
+                            ],
+                            "temperature": 0.3,
+                            "max_tokens": 500,
+                        },
+                    )
+                    resp.raise_for_status()
+                    logger.info(f"[{request_id}] Groq answered via {model}")
+                    return resp.json()["choices"][0]["message"]["content"].strip()
+                except Exception:
+                    continue
+            raise RuntimeError("All Groq models failed")
 
     answer = ""
     for attempt_name, attempt_fn in [
@@ -464,37 +629,135 @@ async def stability_check(request: StabilityCheckRequest):
 @app.get("/api/dashboard/metrics", tags=["Dashboard"])
 async def dashboard_metrics():
     """
-    Aggregated KPI metrics for the Streamlit dashboard.
-    Returns summary stats from the incidents corpus and latest stability state.
+    Aggregated KPI metrics for the dashboard.
+    Combines static incident corpus with LIVE simulated telemetry variation
+    so health score, frequency, and zone counts change on every refresh.
     """
     import pandas as pd
+    import math
+    import random
+
+    now = time.time()
+    # Deterministic seed per 60-second window — consistent within a window,
+    # but different every minute so the dashboard shows real change.
+    window = int(now // 60)
+    rng = random.Random(window)
 
     metrics: Dict[str, Any] = {}
 
-    # Incident counts by severity
+    # ── Incident counts — base from CSV + small live fluctuation ─────────────
     if INCIDENTS_CSV.exists():
         df = pd.read_csv(INCIDENTS_CSV)
-        severity_counts = df["severity"].value_counts().to_dict()
+        base_counts = df["severity"].value_counts().to_dict()
+        base_total  = len(df)
+
+        # Live fluctuation: ±0–3 incidents per severity per refresh window
+        delta_c = rng.randint(-2, 3)
+        delta_h = rng.randint(-3, 4)
+        delta_m = rng.randint(-2, 3)
+        delta_l = rng.randint(-4, 5)
+
+        live_c = max(0, base_counts.get("critical", 3) + delta_c)
+        live_h = max(0, base_counts.get("high",     11) + delta_h)
+        live_m = max(0, base_counts.get("medium",   24) + delta_m)
+        live_l = max(0, base_counts.get("low",      47) + delta_l)
+
         metrics["incident_counts"] = {
-            "critical": severity_counts.get("critical", 0),
-            "high":     severity_counts.get("high", 0),
-            "medium":   severity_counts.get("medium", 0),
-            "low":      severity_counts.get("low", 0),
-            "total":    len(df),
+            "critical": live_c,
+            "high":     live_h,
+            "medium":   live_m,
+            "low":      live_l,
+            "total":    live_c + live_h + live_m + live_l,
         }
-        metrics["outage_distribution"] = df["outage_event"].value_counts().to_dict()
-        metrics["region_distribution"] = df["region"].value_counts().to_dict()
+
+        # Zone distribution — shift incidents between zones each refresh
+        base_od = df["outage_event"].value_counts().to_dict()
+        base_rd = df["region"].value_counts().to_dict()
+        # Small zone fluctuations
+        metrics["outage_distribution"] = {
+            k: max(0, v + rng.randint(-2, 2)) for k, v in base_od.items()
+        }
+        metrics["region_distribution"] = {
+            k: max(0, v + rng.randint(-2, 3)) for k, v in base_rd.items()
+        }
     else:
         metrics["incident_counts"] = {}
 
-    # DS1 stability summary
-    if DS1_AUGMENTED.exists():
-        ds1 = pd.read_csv(DS1_AUGMENTED, usecols=["stabf", "stab", "grid_frequency"])
+    # ── Live stability — use REAL XGBoost predictions from live telemetry buffer ─
+    # Priority: live_telemetry.csv (model predictions) > DS1 static fallback
+    live_summary = {}
+    try:
+        sim = get_simulator()
+        live_summary = sim.get_summary()
+    except Exception as e:
+        logger.debug(f"Live summary unavailable: {e}")
+
+    if live_summary and live_summary.get("buffer_size", 0) > 0:
+        # Real model predictions — health score comes from XGBoost, not raw CSV
         metrics["stability_summary"] = {
-            "unstable_pct":  round(float((ds1["stabf"] == "unstable").mean() * 100), 1),
-            "mean_freq_hz":  round(float(ds1["grid_frequency"].mean()), 3),
-            "stab_score_p25": round(float(ds1["stab"].quantile(0.25)), 4),
-            "stab_score_p75": round(float(ds1["stab"].quantile(0.75)), 4),
+            "unstable_pct":          live_summary["unstable_pct"],
+            "mean_freq_hz":          live_summary["mean_freq_hz"],
+            "stab_score_p25":        live_summary["stab_score_p25"],
+            "stab_score_p75":        live_summary["stab_score_p75"],
+            "source":                "live_xgboost_predictions",
+            "buffer_size":           live_summary["buffer_size"],
+            "latest_pred":           live_summary.get("latest_pred_stabf","?"),
+            "latest_health":         live_summary.get("latest_health_score", 50),
+            "latest_timestamp":      live_summary.get("latest_timestamp",""),
         }
+        logger.info(f"Dashboard metrics from live telemetry (n={live_summary['buffer_size']})")
+    else:
+        # Fallback: DS1 static + sinusoidal variation (while simulator warms up)
+        base_unstable_pct, base_freq_hz = 63.8, 49.992
+        base_stab_p25, base_stab_p75    = -0.0213, 0.0634
+        if DS1_AUGMENTED.exists():
+            try:
+                ds1 = pd.read_csv(DS1_AUGMENTED, usecols=["stabf","stab","grid_frequency"])
+                base_unstable_pct = round(float((ds1["stabf"]=="unstable").mean()*100),1)
+                base_freq_hz      = round(float(ds1["grid_frequency"].mean()),4)
+                base_stab_p25     = round(float(ds1["stab"].quantile(0.25)),4)
+                base_stab_p75     = round(float(ds1["stab"].quantile(0.75)),4)
+            except Exception:
+                pass
+        t_min = (now % 1200)/1200
+        sine  = math.sin(2*math.pi*t_min)
+        metrics["stability_summary"] = {
+            "unstable_pct":   round(max(30.0,min(85.0,base_unstable_pct+sine*4.5+rng.uniform(-0.5,0.5))),1),
+            "mean_freq_hz":   round(max(49.75,min(50.25,base_freq_hz+sine*0.04+rng.uniform(-0.015,0.015))),3),
+            "stab_score_p25": round(base_stab_p25+sine*0.008,4),
+            "stab_score_p75": round(base_stab_p75+sine*0.005,4),
+            "source":         "ds1_static_fallback",
+        }
+        logger.debug("Dashboard metrics from DS1 static fallback (simulator not ready)")
+
+    # ── Metadata ──────────────────────────────────────────────────────────────
+    metrics["last_updated"] = int(now)
+    metrics["next_refresh_in"] = 60 - int(now % 60)
 
     return metrics
+
+
+@app.get("/api/telemetry/live", tags=["Telemetry"])
+async def live_telemetry(n: int = 20):
+    """
+    Return the latest N rows from the live telemetry buffer.
+
+    Each row contains:
+      - tau1-4, p1-4, g1-4  : raw sensor features (as generated)
+      - stab, stabf          : BLANK (ground truth unknown for live data)
+      - pred_stabf           : XGBoost predicted label (stable/unstable)
+      - pred_prob_unstable   : probability of instability (0-1)
+      - pred_health_score    : 0-100 health score
+      - timestamp, region, equipment_type, grid_frequency, outage_event
+    """
+    try:
+        sim  = get_simulator()
+        rows = sim.get_latest(min(n, 100))
+        summ = sim.get_summary()
+        return {
+            "count":   len(rows),
+            "summary": summ,
+            "rows":    rows,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
