@@ -72,6 +72,37 @@ def _check_format(query: str) -> Optional[str]:
     return None
 
 
+# ── Harmful / violent content patterns ────────────────────────────────────────
+HARMFUL_PATTERNS = [
+    # Violence / threats
+    r'\b(kill|murder|stab|shoot|bomb|attack|harm|hurt|threaten|assassin|terror)\b',
+    # Self-harm
+    r'\b(suicide|self.?harm|cut myself|end my life)\b',
+    # Weapons
+    r'\b(knife|gun|weapon|explosive|grenade|poison)\b.*\b(person|people|human|someone|him|her)\b',
+    # Illegal
+    r'\b(hack|ddos|malware|ransomware|phish|steal data|illegal)\b',
+    # Sexual / inappropriate
+    r'\b(sex|porn|naked|nude|rape|molest)\b',
+]
+
+
+def _check_harmful(query: str) -> Optional[str]:
+    """
+    Return rejection reason if query contains harmful/violent/illegal content.
+    """
+    import re as _re
+    lower = query.lower()
+    for pattern in HARMFUL_PATTERNS:
+        if _re.search(pattern, lower):
+            return (
+                "⚠️ This query contains content that cannot be processed by SGEIA. "
+                "SGEIA is a Smart Grid Energy Intelligence Assistant and only handles "
+                "questions about power grid operations, stability, incidents, and energy systems."
+            )
+    return None
+
+
 def _check_domain_relevance(query: str) -> bool:
     """
     Return True if the query contains at least one domain keyword.
@@ -126,37 +157,51 @@ def _mask_pii_presidio(query: str) -> tuple[str, bool, list]:
 
 def validate_and_sanitise(raw_query: str) -> ValidationResult:
     """
-    Run the full three-layer validation pipeline on a raw user query.
-
-    Args:
-        raw_query: The raw string submitted by the user.
-
-    Returns:
-        ValidationResult with sanitised query or rejection details.
+    Four-layer validation pipeline:
+      1. Format check     — length, encoding
+      2. Harmful content  — violence, threats, illegal, self-harm
+      3. Domain relevance — must relate to grid / energy / datasets
+      4. PII masking      — Presidio + regex fallback
     """
-    # ── Layer 1: Format check ──────────────────────────────────────────────────
+    # ── Layer 1: Format ───────────────────────────────────────────────────────
     format_error = _check_format(raw_query)
     if format_error:
         logger.warning(f"Query rejected (format): {format_error}")
         return ValidationResult(is_valid=False, rejection_reason=format_error)
 
-    # ── Layer 2: Domain relevance ─────────────────────────────────────────────
-    # Widget-context queries are always allowed — the widget already scopes them
-    # to a grid domain. Only reject pure free-text with no grid keywords.
+    # ── Layer 2: Harmful content (checked FIRST — highest priority) ───────────
+    harmful_reason = _check_harmful(raw_query)
+    if harmful_reason:
+        logger.warning(f"Query rejected (harmful): '{raw_query[:60]}'")
+        return ValidationResult(is_valid=False, rejection_reason=harmful_reason)
+
+    # ── Layer 3: Domain relevance ─────────────────────────────────────────────
     if not _check_domain_relevance(raw_query):
         reason = (
-            "Your query doesn't appear to be related to power grid or energy systems. "
-            "Please ask about grid stability, outages, transformer health, smart meter data, "
-            "or similar operational topics."
+            "🚫 This query is outside SGEIA's scope.\n\n"
+            "SGEIA only handles questions about:\n"
+            "• Grid stability and health scores\n"
+            "• Incidents, outages, and zone analysis\n"
+            "• Smart meter consumption and anomalies\n"
+            "• Voltage, frequency, transformer health\n"
+            "• DS1 / DS2 dataset queries\n\n"
+            "Please rephrase your question in the context of smart grid operations."
         )
         logger.warning(f"Query rejected (out-of-domain): '{raw_query[:60]}'")
         return ValidationResult(is_valid=False, rejection_reason=reason)
 
-    # ── Layer 3: PII masking ──────────────────────────────────────────────────
+    # ── Layer 4: PII masking ──────────────────────────────────────────────────
     sanitised, pii_detected, pii_entities = _mask_pii_presidio(raw_query)
 
+    # Additional regex-based masking (IDs, account numbers, coordinates)
+    import re as _re
+    sanitised = _re.sub(r'\b\d{10,}\b', '[ID_MASKED]', sanitised)          # long numeric IDs
+    sanitised = _re.sub(r'\b[A-Z]{2,}\d{4,}\b', '[REF_MASKED]', sanitised) # ref codes like INC0042
+    sanitised = _re.sub(r'\b\d{1,3}\.\d+[NS],?\s*\d{1,3}\.\d+[EW]\b',
+                        '[GPS_MASKED]', sanitised)                           # GPS coordinates
+
     if pii_detected:
-        logger.info(f"PII masked in query. Entities: {pii_entities}")
+        logger.info(f"PII masked: {pii_entities}")
 
     return ValidationResult(
         is_valid=True,

@@ -521,23 +521,22 @@ async def rag_stream_endpoint(request: ChatRequest):
                 "status": "running",
             }, event="step")
 
-            from src.guardrails.validators import validate_and_sanitise, ValidationResult
+            from src.guardrails.validators import validate_and_sanitise
             validation = validate_and_sanitise(request.query)
 
-            guard_details = []
-            if len(request.query.strip()) < 5:
-                guard_details.append("❌ Query too short")
-            else:
-                guard_details.append("✅ Length: OK")
-
             if not validation.is_valid:
-                # Domain check failed — still proceed for data/analysis queries
-                guard_details.append("⚠️ Domain: broadened (data query detected)")
-                sanitised_query = request.query.strip()
-            else:
-                guard_details.append("✅ Domain: grid/energy topic confirmed")
-                sanitised_query = validation.sanitised_query
+                # Hard block — harmful content or out-of-scope
+                yield _sse_event({
+                    "step": "input_guard",
+                    "label": "🛡️ Input Guardrails — Blocked",
+                    "text": f"❌ Query rejected: {validation.rejection_reason[:80]}",
+                    "status": "done",
+                }, event="step")
+                yield _sse_event({"answer": validation.rejection_reason, "request_id": request_id}, event="answer")
+                return
 
+            sanitised_query = validation.sanitised_query
+            guard_details   = ["✅ Format OK", "✅ Domain: grid/energy", "✅ No harmful content"]
             if validation.pii_detected:
                 guard_details.append(f"🔒 PII masked: {', '.join(validation.pii_entities)}")
             else:
