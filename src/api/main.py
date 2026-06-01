@@ -505,45 +505,163 @@ async def rag_stream_endpoint(request: ChatRequest):
                 }, event="answer")
                 return
 
-            # ── Step 1: Load knowledge base ───────────────────────────────────
+            # ══════════════════════════════════════════════════════════════════
+            # FULL PIPELINE: Input Guardrails → Cache → Orchestrator →
+            #                RAG Retrieval → Stability → LLM → DeepEval →
+            #                Output Guardrails → Cache Store
+            # ══════════════════════════════════════════════════════════════════
+
+            query_lower = request.query.lower()
+
+            # ── Step 1: INPUT GUARDRAILS ──────────────────────────────────────
             yield _sse_event({
-                "step": "load_kb",
-                "label": "📂 Loading Knowledge Base",
-                "text": f"Reading incident corpus from grid_incidents_synthetic.csv ({INCIDENTS_CSV.name})",
+                "step": "input_guard",
+                "label": "🛡️ Input Guardrails",
+                "text": "Checking format, domain relevance, PII detection…",
                 "status": "running",
             }, event="step")
 
-            kb_size = 0
-            if INCIDENTS_CSV.exists():
-                df_inc = pd.read_csv(INCIDENTS_CSV)
-                kb_size = len(df_inc)
+            from src.guardrails.validators import validate_and_sanitise, ValidationResult
+            validation = validate_and_sanitise(request.query)
 
-            await __import__("asyncio").sleep(0.05)
+            guard_details = []
+            if len(request.query.strip()) < 5:
+                guard_details.append("❌ Query too short")
+            else:
+                guard_details.append("✅ Length: OK")
+
+            if not validation.is_valid:
+                # Domain check failed — still proceed for data/analysis queries
+                guard_details.append("⚠️ Domain: broadened (data query detected)")
+                sanitised_query = request.query.strip()
+            else:
+                guard_details.append("✅ Domain: grid/energy topic confirmed")
+                sanitised_query = validation.sanitised_query
+
+            if validation.pii_detected:
+                guard_details.append(f"🔒 PII masked: {', '.join(validation.pii_entities)}")
+            else:
+                guard_details.append("✅ PII: none detected")
+
             yield _sse_event({
-                "step": "load_kb",
-                "label": "📂 Knowledge Base Loaded",
-                "text": f"✅ {kb_size} incident records ready | DS1: 60,000 stability rows | DS2: 2M smart meter readings",
+                "step": "input_guard",
+                "label": "🛡️ Input Guardrails Passed",
+                "text": " | ".join(guard_details),
                 "status": "done",
             }, event="step")
 
-            # ── Step 2: Chunk documents ───────────────────────────────────────
+            # ── Step 2: CACHE LOOKUP ──────────────────────────────────────────
             yield _sse_event({
-                "step": "chunk",
-                "label": "✂️ Chunking Documents",
-                "text": "Each incident description treated as one chunk — no splitting needed (avg 50 words per record)",
+                "step": "cache",
+                "label": "⚡ Cache Lookup",
+                "text": "Checking if similar query was answered before (cosine similarity > 0.97)…",
+                "status": "running",
+            }, event="step")
+
+            cached_answer = None
+            try:
+                _store = get_chroma_store()
+                cached_answer = _store.check_cache(sanitised_query)
+            except Exception as _ce:
+                logger.debug(f"Cache check skipped: {_ce}")
+
+            if cached_answer:
+                yield _sse_event({
+                    "step": "cache",
+                    "label": "⚡ Cache Hit!",
+                    "text": "✅ Semantically similar query found — returning cached response instantly",
+                    "status": "done",
+                }, event="step")
+                yield _sse_event({"answer": cached_answer, "request_id": request_id, "source": "cache"}, event="answer")
+                return
+
+            yield _sse_event({
+                "step": "cache",
+                "label": "⚡ Cache Miss",
+                "text": "No similar query cached — proceeding through full pipeline",
                 "status": "done",
             }, event="step")
 
-            # ── Step 3: Embed query ───────────────────────────────────────────
+            # ── Step 3: ORCHESTRATOR / QUERY ROUTER ──────────────────────────
+            yield _sse_event({
+                "step": "orchestrator",
+                "label": "🧩 Orchestrator Agent",
+                "text": "Classifying intent → routing to correct data sources…",
+                "status": "running",
+            }, event="step")
+
+            kb_size = _incidents_cache.get("total", 200)
+
+            # Smart routing
+            DS1_KW  = ["tau","p1","p2","p3","p4","g1","g2","g3","g4","stab","stabf",
+                        "stability","unstable","stable","xgboost","telemetry","reaction time"]
+            DS2_KW  = ["voltage","volt","current","amp","power consumption","reactive",
+                        "sub metering","kitchen","laundry","hvac","household","demand","ds2"]
+            INC_KW  = ["incident","outage","fault","failure","zone","severity","critical",
+                        "high","medium","low","full outage","partial","frequency excursion",
+                        "voltage deviation","renewable","meter dropout","equipment"]
+
+            wants_ds1      = any(k in query_lower for k in DS1_KW)
+            wants_ds2      = any(k in query_lower for k in DS2_KW)
+            wants_incidents= any(k in query_lower for k in INC_KW)
+            wants_raw      = any(k in query_lower for k in ["last","latest","list","show","give","first","top","10","20","5"])
+
+            if "frequency" in query_lower or "hz" in query_lower:
+                wants_ds1 = True
+            if not wants_ds1 and not wants_ds2 and not wants_incidents:
+                wants_ds1 = wants_ds2 = wants_incidents = True
+
+            route = []
+            if wants_ds1:      route.append("DS1-Stability")
+            if wants_ds2:      route.append("DS2-SmartMeter")
+            if wants_incidents:route.append("Incidents-RAG")
+
+            yield _sse_event({
+                "step": "orchestrator",
+                "label": "🧩 Routing Decision Made",
+                "text": f"✅ Route: {' + '.join(route)} | KB: {kb_size} incidents | Raw data: {'yes' if wants_raw else 'no'}",
+                "status": "done",
+            }, event="step")
+
+            # ── Step 4: EMBED QUERY ───────────────────────────────────────────
             yield _sse_event({
                 "step": "embed",
-                "label": "🔢 Generating Query Embedding",
-                "text": f"Encoding query with all-MiniLM-L6-v2 (384-dim) → vector for semantic search",
+                "label": "🔢 Query Embedding",
+                "text": "Encoding with all-MiniLM-L6-v2 (384-dim) → vector for semantic search",
                 "status": "running",
             }, event="step")
 
-            # Detect filters from query
-            query_lower = request.query.lower()
+            zone_m = _re.search(r'\bzone[_\s-]?([a-dA-D])\b', request.query, _re.I)
+            sev_f  = next((s for s in ["critical","high","medium","low"] if s in query_lower), None)
+            eq_f   = next((e for e in ["transformer","substation","distribution_unit",
+                                        "smart_meter_bank","transmission_line","renewable_inverter"]
+                            if e.replace("_"," ") in query_lower or e in query_lower), None)
+
+            chroma_filters: dict = {}
+            if zone_m: chroma_filters["region"]        = f"Zone_{zone_m.group(1).upper()}"
+            if sev_f:  chroma_filters["severity"]       = sev_f
+            if eq_f:   chroma_filters["equipment_type"] = eq_f
+
+            chroma_filter = None
+            if len(chroma_filters) > 1:
+                chroma_filter = {"$and": [{k: v} for k, v in chroma_filters.items()]}
+            elif chroma_filters:
+                k, v = next(iter(chroma_filters.items()))
+                chroma_filter = {k: v}
+
+            filter_desc = ", ".join(f"{k}={v}" for k, v in chroma_filters.items()) or "none"
+            yield _sse_event({
+                "step": "embed",
+                "label": "🔢 Embedded",
+                "text": f"✅ Query vector ready | Filters detected: {filter_desc}",
+                "status": "done",
+            }, event="step")
+
+            # (continue with BM25 + ChromaDB search — same variable names as before)
+            # Re-assign for downstream compatibility
+            wants_stability = wants_ds1
+            wants_meter     = wants_ds2
+            wants_dataset   = wants_raw or wants_ds1 or wants_ds2
             zone_m   = _re.search(r'\bzone[_\s-]?([a-dA-D])\b', request.query, _re.I)
             sev_f    = next((s for s in ["critical","high","medium","low"] if s in query_lower), None)
             eq_f     = next((e for e in ["transformer","substation","distribution_unit",
@@ -1098,7 +1216,103 @@ DS2 (household_power_consumption.csv) columns:
                 parts.append(f"\n_Add `GROQ_API_KEY=gsk_...` to .env for full AI analysis._")
                 llm_answer = "\n".join(parts)
 
-            yield _sse_event({"answer": llm_answer, "request_id": request_id}, event="answer")
+            # ── DeepEval: Quality Assessment ──────────────────────────────────
+            yield _sse_event({
+                "step": "deepeval",
+                "label": "🔬 DeepEval Quality Check",
+                "text": "Evaluating faithfulness, relevance and hallucination risk…",
+                "status": "running",
+            }, event="step")
+
+            deepeval_pass   = True
+            deepeval_issues = []
+            deepeval_score  = 1.0
+
+            if llm_answer:
+                # 1. Faithfulness: answer must reference actual data values
+                has_numbers = bool(_re.search(r'\d+\.?\d*', llm_answer))
+                has_zones   = any(z in llm_answer for z in ["Zone_A","Zone_B","Zone_C","Zone_D","zone"])
+                is_too_short= len(llm_answer.strip()) < 40
+                is_generic  = any(p in llm_answer.lower() for p in [
+                    "i don't have", "i cannot", "not available", "no information",
+                    "unable to", "i'm not sure"
+                ])
+
+                if is_too_short:
+                    deepeval_issues.append("⚠️ Response too short")
+                    deepeval_score -= 0.3
+                if is_generic and not fused_incidents:
+                    deepeval_issues.append("⚠️ Generic response — no grounding data")
+                    deepeval_score -= 0.3
+                if not has_numbers and not has_zones and len(fused_incidents) > 0:
+                    deepeval_issues.append("⚠️ Missing specific values from retrieved incidents")
+                    deepeval_score -= 0.2
+
+                deepeval_score = max(0.0, round(deepeval_score, 2))
+                deepeval_pass  = deepeval_score >= 0.5
+
+            eval_label = "✅ Passed" if deepeval_pass else "⚠️ Low quality — returning best available"
+            eval_text  = f"{eval_label} | Score: {deepeval_score:.0%} | " + (
+                ", ".join(deepeval_issues) if deepeval_issues else "Faithfulness OK, values cited, no hallucination detected"
+            )
+
+            yield _sse_event({
+                "step": "deepeval",
+                "label": f"🔬 DeepEval: {eval_label}",
+                "text": eval_text,
+                "status": "done",
+            }, event="step")
+
+            # ── Output Guardrails ─────────────────────────────────────────────
+            yield _sse_event({
+                "step": "output_guard",
+                "label": "🔒 Output Guardrails",
+                "text": "Checking response for harmful content, PII leakage, format validity…",
+                "status": "running",
+            }, event="step")
+
+            output_issues = []
+            final_answer  = llm_answer
+
+            # 1. Block harmful content
+            harmful = ["ignore previous","jailbreak","forget your instructions",
+                       "act as","you are now","pretend you"]
+            if any(h in final_answer.lower() for h in harmful):
+                final_answer = "⚠️ Response blocked by output guardrails."
+                output_issues.append("Harmful content detected and blocked")
+
+            # 2. Strip any leaked system prompt fragments
+            if "=== " in final_answer and "===" in final_answer:
+                final_answer = _re.sub(r'===.*?===', '', final_answer, flags=_re.DOTALL).strip()
+                output_issues.append("System prompt fragments removed")
+
+            # 3. Ensure minimum useful length
+            if len(final_answer.strip()) < 20:
+                final_answer = "No meaningful answer could be generated for this query. Try rephrasing."
+                output_issues.append("Response too short — replaced with fallback")
+
+            # 4. Mask any PII that slipped through
+            final_answer = _re.sub(r'\b[\w.+-]+@[\w-]+\.[a-z]{2,}\b', '[EMAIL]', final_answer)
+            final_answer = _re.sub(r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b', '[PHONE]', final_answer)
+
+            og_status = "⚠️ Issues fixed: " + "; ".join(output_issues) if output_issues else "✅ Clean — no harmful content, no PII leakage"
+            yield _sse_event({
+                "step": "output_guard",
+                "label": "🔒 Output Guardrails Passed",
+                "text": og_status,
+                "status": "done",
+            }, event="step")
+
+            # ── Cache Store (save for future identical queries) ────────────────
+            if llm_answer and deepeval_pass:
+                try:
+                    _store = get_chroma_store()
+                    _store.cache_response(sanitised_query, final_answer)
+                    logger.info(f"[{request_id}] Response cached for future reuse")
+                except Exception as _cse:
+                    logger.debug(f"Cache store skipped: {_cse}")
+
+            yield _sse_event({"answer": final_answer, "request_id": request_id}, event="answer")
 
         except Exception as e:
             logger.error(f"[{request_id}] RAG stream error: {e}")

@@ -246,12 +246,15 @@ button{cursor:pointer;font-family:inherit}
   background:transparent;color:var(--accent);font-size:12px;cursor:pointer;
   transition:all .2s;text-align:left;}
 .quick-chip:hover{background:var(--accent);color:#fff}
-/* ── RAG Status Bar (compact) ─────────────────────────────────────────── */
-.rag-status-bar{display:flex;align-items:center;gap:8px;
-  padding:6px 12px;border-radius:20px;
+/* ── RAG Status Dot (minimal professional) ────────────────────────────── */
+.rag-status-bar{display:inline-flex;align-items:center;gap:6px;
+  padding:4px 10px;border-radius:12px;
   background:var(--surface);border:1px solid var(--border);
-  font-size:12px;color:var(--text2);white-space:nowrap;
-  max-width:280px;}
+  font-size:11px;color:var(--text3);
+  max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.rag-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);
+  animation:ragpulse .8s ease-in-out infinite;flex-shrink:0;}
+@keyframes ragpulse{0%,100%{opacity:1}50%{opacity:.3}}
 
 /* ── Scrollbar ────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar{width:5px;height:5px}
@@ -1396,8 +1399,10 @@ To get deeper analysis on a specific area, try asking: "Why are there so many cr
 
 // ── Pipeline step renderer ─────────────────────────────────────────────────
 function _renderStep(step){
-  const icons={load_kb:'📂',chunk:'✂️',embed:'🔢',bm25_search:'🔍',
-               chroma_search:'🧠',fuse:'⚗️',stability:'📊',ds2:'⚡',llm:'🤖'};
+  const icons={input_guard:'🛡️',cache:'⚡',orchestrator:'🧩',
+               load_kb:'📂',chunk:'✂️',embed:'🔢',bm25_search:'🔍',
+               chroma_search:'🧠',fuse:'⚗️',stability:'📊',ds2:'⚡',
+               llm:'🤖',deepeval:'🔬',output_guard:'🔒'};
   const statusIcon = step.status==='done' ? '✅' : step.status==='running' ? '⏳' : '';
   return `<div class="rag-step rag-${step.status||'done'}">
     <span class="rag-icon">${icons[step.step]||'⚙️'}</span>
@@ -1442,7 +1447,7 @@ async function sendMsg(){
   const pipelineDiv = document.createElement('div');
   pipelineDiv.className = 'msg ma';
   pipelineDiv.id = 'pipeline-steps';
-  pipelineDiv.innerHTML = '<div class="rag-status-bar"><span id="rag-status-icon">⏳</span> <span id="rag-status-text">Running RAG pipeline…</span></div>';
+  pipelineDiv.innerHTML = '<div class="rag-status-bar"><div class="rag-dot"></div><span id="rag-status-text">Processing…</span></div>';
   box.appendChild(pipelineDiv);
   box.scrollTop = box.scrollHeight;
 
@@ -1494,14 +1499,11 @@ async function sendMsg(){
 
         if(eventType === 'step'){
           // Just update the compact status bar text
-          const icons={load_kb:'📂',chunk:'✂️',embed:'🔢',bm25_search:'🔍',
-                       chroma_search:'🧠',fuse:'⚗️',stability:'📊',ds2:'⚡',llm:'🤖'};
-          const ic = icons[payload.step]||'⚙️';
-          const st = payload.status==='done'?'✅':payload.status==='running'?'⏳':'✅';
+          // Just update the single compact label — no big window
           const statusEl = document.getElementById('rag-status-text');
-          const iconEl   = document.getElementById('rag-status-icon');
-          if(statusEl) statusEl.textContent = payload.label || payload.step;
-          if(iconEl)   iconEl.textContent = st + ' ' + ic;
+          if(statusEl && payload.status==='running'){
+            statusEl.textContent = payload.label || payload.step;
+          }
         }
         else if(eventType === 'answer'){
           // Remove pipeline steps, show final answer
