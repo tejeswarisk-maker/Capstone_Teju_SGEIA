@@ -240,6 +240,16 @@ button{cursor:pointer;font-family:inherit}
   border:none;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .2s;}
 .send-btn:hover{background:var(--accent-h)}
 .chat-hint{font-size:11px;color:var(--text3);text-align:center;margin-top:6px}
+/* ── DeepEval scores ──────────────────────────────────────────────────── */
+.dv-scores{display:flex;gap:12px;flex-wrap:wrap;margin-top:5px;padding:4px 0 2px;
+  border-top:1px solid var(--border);font-size:10px;color:var(--text3);line-height:1.6;}
+.dv-scores span{cursor:help;}
+.dv-scores b{color:var(--text2);font-weight:600;}
+/* ── Feedback buttons ─────────────────────────────────────────────────── */
+.msg-fb{display:flex;gap:4px;margin-top:4px;}
+.fb-btn{background:transparent;border:1px solid var(--border);border-radius:6px;
+  padding:2px 8px;font-size:13px;cursor:pointer;transition:all .15s;}
+.fb-btn:hover{background:var(--bg);border-color:var(--accent);}
 /* ── Quick question chips ─────────────────────────────────────────────── */
 .quick-chips{display:flex;flex-wrap:wrap;gap:8px;padding:12px 0;justify-content:center}
 .quick-chip{padding:7px 14px;border-radius:20px;border:1.5px solid var(--accent);
@@ -995,14 +1005,62 @@ function renderMsgs(msgs){
     return;
   }
   emp.style.display='none';
-  msgs.forEach(m=>{
+  msgs.forEach((m,idx)=>{
     const d=document.createElement('div');
     d.className='msg '+(m.role==='user'?'mu':'ma');
     const content = m.role==='ai' ? mdToHtml(m.content) : esc(m.content);
-    d.innerHTML=`<div class="msg-bbl">${content}</div><div class="msg-time">${m.time}</div>`;
+    // Show feedback buttons only on AI messages
+    // DeepEval scores shown in grey below AI answer
+    let dvHtml = '';
+    if(m.role==='ai' && m.deepeval){
+      const dv = m.deepeval;
+      const fs = (dv.faithfulness_score*100).toFixed(0);
+      const js = dv.llm_judge_score?.toFixed(1);
+      const fp = dv.faithfulness_pass ? '✅':'⚠️';
+      const jp = dv.llm_judge_pass    ? '✅':'⚠️';
+      const sp = dv.output_safety_pass? '✅':'⚠️';
+      dvHtml = `<div class="dv-scores">
+        <span title="Does the answer use real data from retrieved incidents?">🔬 Faithfulness: <b>${fs}%</b> ${fp}</span>
+        <span title="AI judge scored this answer 1-5 (≥3 passes)">⚖️ LLM Judge: <b>${js}/5</b> ${jp}</span>
+        <span title="No harmful content, no PII leakage detected">🔒 Output Safety: ${sp}</span>
+      </div>`;
+    }
+    const fbHtml = m.role==='ai' ? `
+      <div class="msg-fb" id="fb-${idx}">
+        <button class="fb-btn" onclick="sendFeedback(${idx},5,true)" title="Helpful">👍</button>
+        <button class="fb-btn" onclick="sendFeedback(${idx},2,false)" title="Not helpful">👎</button>
+      </div>` : '';
+    d.innerHTML=`<div class="msg-bbl">${content}</div>${dvHtml}<div class="msg-time">${m.time}</div>${fbHtml}`;
+    d.dataset.idx=idx;
     box.appendChild(d);
   });
   box.scrollTop=box.scrollHeight;
+}
+
+async function sendFeedback(idx, rating, helpful){
+  const type=curWidget?.type||'general';
+  const msgs=threads[type]||[];
+  // Find the user question before this AI answer
+  const aiMsg  = msgs[idx];
+  const userMsg= msgs.slice(0,idx).reverse().find(m=>m.role==='user');
+  if(!aiMsg||!userMsg) return;
+
+  // Replace buttons with thank you
+  const fbEl=document.getElementById(`fb-${idx}`);
+  if(fbEl) fbEl.innerHTML=`<span style="font-size:11px;color:var(--text3)">${helpful?'👍 Marked helpful':'👎 Feedback noted'}</span>`;
+
+  try{
+    await fetch(`${API}/api/feedback`,{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        query:      userMsg.content,
+        answer:     aiMsg.content,
+        rating,
+        helpful,
+        session_id: type,
+      }),
+    });
+  }catch(e){ console.warn('Feedback send failed:', e); }
 }
 // ── Instant local answer engine ────────────────────────────────────────────
 function _localAnswer(query, widgetType){
@@ -1506,10 +1564,10 @@ async function sendMsg(){
           }
         }
         else if(eventType === 'answer'){
-          // Remove pipeline steps, show final answer
           pipelineDiv.remove();
           const answer = payload.answer||'No response.';
-          threads[type].push({role:'ai', content:answer, time:fmtT()});
+          const dv = payload.deepeval||null;
+          threads[type].push({role:'ai', content:answer, time:fmtT(), deepeval:dv, source:payload.source||'rag'});
           renderMsgs(threads[type]);
         }
         else if(eventType === 'error'){

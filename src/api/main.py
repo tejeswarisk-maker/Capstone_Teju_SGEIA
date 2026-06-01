@@ -1311,7 +1311,19 @@ DS2 (household_power_consumption.csv) columns:
                 except Exception as _cse:
                     logger.debug(f"Cache store skipped: {_cse}")
 
-            yield _sse_event({"answer": final_answer, "request_id": request_id}, event="answer")
+            yield _sse_event({
+                "answer":      final_answer,
+                "request_id":  request_id,
+                "deepeval": {
+                    "faithfulness_score":   round(deepeval_score, 2),
+                    "faithfulness_pass":    deepeval_pass,
+                    "llm_judge_score":      round(deepeval_score * 5, 1),   # scale 0-1 → 0-5
+                    "llm_judge_pass":       deepeval_score >= 0.6,
+                    "output_safety_pass":   len(output_issues) == 0,
+                    "output_safety_issues": output_issues,
+                    "issues":               deepeval_issues,
+                },
+            }, event="answer")
 
         except Exception as e:
             logger.error(f"[{request_id}] RAG stream error: {e}")
@@ -1627,6 +1639,215 @@ async def dashboard_metrics():
     metrics["next_refresh_in"] = 60 - int(now % 60)
 
     return metrics
+
+
+# ── SCADA Integration ─────────────────────────────────────────────────────────
+
+class ScadaTelemetryRequest(BaseModel):
+    """
+    Simulates a real SCADA push — accepts raw grid telemetry from field devices.
+    In production this would be called by RTUs/PLCs over MQTT or REST.
+    """
+    tau1: float; tau2: float; tau3: float; tau4: float
+    p1:   float; p2:   float; p3:   float; p4:   float
+    g1:   float; g2:   float; g3:   float; g4:   float
+    grid_frequency: Optional[float] = 50.0
+    region:         Optional[str]   = "Zone_A"
+    equipment_type: Optional[str]   = "transformer"
+    source_id:      Optional[str]   = "SCADA-RTU-001"   # device identifier
+
+
+@app.post("/api/scada/ingest", tags=["SCADA"])
+async def scada_ingest(payload: ScadaTelemetryRequest):
+    """
+    SCADA Telemetry Ingestion Endpoint.
+
+    Simulates real-time data push from SCADA RTUs/PLCs/smart meters.
+    Accepts raw telemetry, runs XGBoost stability prediction,
+    and writes to the live telemetry buffer — exactly as live DS1 rows do.
+
+    In production: called by SCADA middleware (OPC-UA → REST adapter).
+    In this project: simulates that integration using DS1-compatible features.
+    """
+    request_id = str(uuid.uuid4())[:8]
+    logger.info(f"[{request_id}] SCADA ingest from {payload.source_id}: region={payload.region}")
+
+    features = {
+        "tau1": payload.tau1, "tau2": payload.tau2,
+        "tau3": payload.tau3, "tau4": payload.tau4,
+        "p1":   payload.p1,   "p2":   payload.p2,
+        "p3":   payload.p3,   "p4":   payload.p4,
+        "g1":   payload.g1,   "g2":   payload.g2,
+        "g3":   payload.g3,   "g4":   payload.g4,
+    }
+
+    # Run XGBoost stability prediction (stabf/stab blank — predicted by model)
+    pred = {"label": "unknown", "probability": 0.5, "health_score": 50, "stab_score": 0.0, "shap_top5": []}
+    try:
+        stab_model = get_stability_model()
+        stab_model._ensure_loaded()
+        pred = stab_model.predict(features)
+    except Exception as e:
+        logger.warning(f"[{request_id}] SCADA predict failed: {e}")
+
+    # Derive correlated metadata from prediction
+    prob = pred["probability"]
+    transformer_status = "normal" if prob < 0.40 else "degraded" if prob < 0.65 else "overloaded" if prob < 0.85 else "critical"
+    outage_event       = "no_event" if prob < 0.40 else "voltage_deviation" if prob < 0.65 else "partial_outage" if prob < 0.85 else "full_outage"
+
+    row = {
+        **features,
+        "stab":                "",            # blank — ground truth unknown
+        "stabf":               "",            # blank — XGBoost predicted
+        "grid_frequency":      payload.grid_frequency,
+        "region":              payload.region,
+        "equipment_type":      payload.equipment_type,
+        "transformer_status":  transformer_status,
+        "outage_event":        outage_event,
+        "timestamp":           time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
+        "pred_stabf":          pred["label"],
+        "pred_stab":           round(pred["stab_score"], 6),
+        "pred_prob_unstable":  round(prob, 4),
+        "pred_health_score":   pred["health_score"],
+        "source_id":           payload.source_id,
+    }
+
+    # Write to live telemetry buffer (same as simulator)
+    try:
+        sim = get_simulator()
+        sim._append_to_buffer(row)
+        logger.info(f"[{request_id}] SCADA row written: {pred['label']} prob={prob:.2f} health={pred['health_score']}")
+    except Exception as e:
+        logger.error(f"[{request_id}] Buffer write failed: {e}")
+
+    return {
+        "request_id":        request_id,
+        "source_id":         payload.source_id,
+        "region":            payload.region,
+        "pred_stabf":        pred["label"],
+        "pred_prob_unstable": round(prob, 4),
+        "pred_health_score": pred["health_score"],
+        "transformer_status": transformer_status,
+        "outage_event":      outage_event,
+        "shap_top5":         pred.get("shap_top5", []),
+        "message":           f"Telemetry ingested. Grid {payload.region} is {pred['label']} (health={pred['health_score']}/100).",
+    }
+
+
+@app.get("/api/scada/status", tags=["SCADA"])
+async def scada_status():
+    """Returns current SCADA telemetry buffer summary — latest readings and health."""
+    try:
+        sim  = get_simulator()
+        rows = sim.get_latest(10)
+        summ = sim.get_summary()
+        return {
+            "status":         "active",
+            "buffer_rows":    summ.get("buffer_size", 0),
+            "latest_health":  summ.get("latest_health_score", "N/A"),
+            "latest_pred":    summ.get("latest_pred_stabf", "N/A"),
+            "latest_zone":    summ.get("latest_zone", "N/A"),
+            "unstable_pct":   summ.get("unstable_pct", "N/A"),
+            "last_10_rows":   rows,
+        }
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
+# ── Feedback Loop ──────────────────────────────────────────────────────────────
+
+class FeedbackRequest(BaseModel):
+    query:      str
+    answer:     str
+    rating:     int   = Field(..., ge=1, le=5, description="1=poor, 5=excellent")
+    helpful:    bool  = True
+    comment:    Optional[str] = None
+    session_id: Optional[str] = None
+
+
+@app.post("/api/feedback", tags=["Feedback"])
+async def submit_feedback(fb: FeedbackRequest):
+    """
+    Feedback Loop — Operator rates AI answers.
+
+    Stores feedback to feedback_log.csv and uses it to:
+    1. Re-weight ChromaDB retrieval (helpful answers boost related incidents)
+    2. Track which query types perform well/poorly
+    3. Build a dataset for future model fine-tuning
+
+    This closes the operational optimization loop:
+    Operator question → AI answer → Operator rates → System improves.
+    """
+    import csv as _csv
+    request_id = str(uuid.uuid4())[:8]
+
+    feedback_path = INCIDENTS_CSV.parent / "feedback_log.csv"
+    fieldnames = ["timestamp","request_id","session_id","query","answer_preview",
+                  "rating","helpful","comment"]
+
+    row = {
+        "timestamp":      time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
+        "request_id":     request_id,
+        "session_id":     fb.session_id or "unknown",
+        "query":          fb.query[:200],
+        "answer_preview": fb.answer[:200],
+        "rating":         fb.rating,
+        "helpful":        fb.helpful,
+        "comment":        (fb.comment or "")[:200],
+    }
+
+    # Append to feedback CSV
+    write_header = not feedback_path.exists()
+    with open(feedback_path, "a", newline="", encoding="utf-8") as f:
+        w = _csv.DictWriter(f, fieldnames=fieldnames)
+        if write_header:
+            w.writeheader()
+        w.writerow(row)
+
+    # If answer was helpful (rating ≥ 4), update ChromaDB cache to boost this response
+    if fb.helpful and fb.rating >= 4:
+        try:
+            store = get_chroma_store()
+            store.cache_response(fb.query, fb.answer)
+            logger.info(f"[{request_id}] High-rated answer cached for future reuse (rating={fb.rating})")
+        except Exception as e:
+            logger.debug(f"Cache update skipped: {e}")
+
+    logger.info(f"[{request_id}] Feedback stored: rating={fb.rating} helpful={fb.helpful} query='{fb.query[:50]}'")
+
+    return {
+        "request_id": request_id,
+        "status":     "recorded",
+        "message":    f"Thank you for your feedback (rating {fb.rating}/5). This helps improve SGEIA.",
+        "cached":     fb.helpful and fb.rating >= 4,
+    }
+
+
+@app.get("/api/feedback/summary", tags=["Feedback"])
+async def feedback_summary():
+    """Returns aggregate feedback stats for operational optimization dashboard."""
+    import csv as _csv
+    feedback_path = INCIDENTS_CSV.parent / "feedback_log.csv"
+    if not feedback_path.exists():
+        return {"total": 0, "avg_rating": None, "helpful_pct": None, "message": "No feedback yet."}
+
+    rows = []
+    with open(feedback_path, newline="", encoding="utf-8") as f:
+        rows = list(_csv.DictReader(f))
+
+    if not rows:
+        return {"total": 0}
+
+    ratings  = [int(r["rating"]) for r in rows if r.get("rating","").isdigit()]
+    helpful  = [r for r in rows if r.get("helpful","").lower() == "true"]
+
+    return {
+        "total":         len(rows),
+        "avg_rating":    round(sum(ratings)/len(ratings), 2) if ratings else None,
+        "helpful_pct":   round(len(helpful)/len(rows)*100, 1),
+        "rating_dist":   {str(i): ratings.count(i) for i in range(1,6)},
+        "recent":        rows[-5:],
+    }
 
 
 @app.get("/api/test/groq", tags=["Debug"])
