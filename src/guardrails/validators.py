@@ -88,19 +88,22 @@ HARMFUL_PATTERNS = [
 ]
 
 
-def _check_harmful(query: str) -> Optional[str]:
+def _check_harmful(query: str) -> Optional[tuple]:
     """
-    Return rejection reason if query contains harmful/violent/illegal content.
+    Return (rejection_reason, unsafe_keyword) if query contains harmful content, else None.
     """
     import re as _re
     lower = query.lower()
     for pattern in HARMFUL_PATTERNS:
-        if _re.search(pattern, lower):
-            return (
-                "⚠️ This query contains content that cannot be processed by SGEIA. "
-                "SGEIA is a Smart Grid Energy Intelligence Assistant and only handles "
-                "questions about power grid operations, stability, incidents, and energy systems."
+        m = _re.search(pattern, lower)
+        if m:
+            unsafe_word = m.group(0).strip()
+            reason = (
+                f"⚠️ This query contains content that cannot be processed by SGEIA.\n\n"
+                f"SGEIA is a Smart Grid Energy Intelligence Assistant and only handles "
+                f"questions about power grid operations, stability, incidents, and energy systems."
             )
+            return reason, unsafe_word
     return None
 
 
@@ -171,10 +174,15 @@ def validate_and_sanitise(raw_query: str) -> ValidationResult:
         return ValidationResult(is_valid=False, rejection_reason=format_error, blocked_by="Layer 1 — Format Check")
 
     # ── Layer 2: Harmful content ───────────────────────────────────────────────
-    harmful_reason = _check_harmful(raw_query)
-    if harmful_reason:
-        logger.warning(f"Query rejected (harmful): '{raw_query[:60]}'")
-        return ValidationResult(is_valid=False, rejection_reason=harmful_reason, blocked_by="Layer 2 — Harmful Content Detection")
+    harmful_result = _check_harmful(raw_query)
+    if harmful_result:
+        harmful_reason, unsafe_keyword = harmful_result
+        logger.warning(f"Query rejected (harmful keyword='{unsafe_keyword}'): '{raw_query[:60]}'")
+        return ValidationResult(
+            is_valid=False,
+            rejection_reason=harmful_reason,
+            blocked_by=f"Layer 2 — Harmful Content Detection | Unsafe keyword: **{unsafe_keyword}**",
+        )
 
     # ── Layer 3: Domain relevance ─────────────────────────────────────────────
     if not _check_domain_relevance(raw_query):
