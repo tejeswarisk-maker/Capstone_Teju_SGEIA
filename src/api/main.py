@@ -1256,36 +1256,89 @@ DS2 (household_power_consumption.csv) columns:
                 "status": "running",
             }, event="step")
 
-            deepeval_pass   = True
-            deepeval_issues = []
-            deepeval_score  = 1.0
+            # ══ SCORE 1: FAITHFULNESS (0% – 100%) ════════════════════════════
+            # Question: "Does the answer use REAL DATA from retrieved documents?"
+            # Starts at 100%, deductions for missing evidence.
+            faithfulness   = 1.0
+            faith_issues   = []
 
             if llm_answer:
-                # 1. Faithfulness: answer must reference actual data values
-                has_numbers = bool(_re.search(r'\d+\.?\d*', llm_answer))
-                has_zones   = any(z in llm_answer for z in ["Zone_A","Zone_B","Zone_C","Zone_D","zone"])
-                is_too_short= len(llm_answer.strip()) < 40
-                is_generic  = any(p in llm_answer.lower() for p in [
-                    "i don't have", "i cannot", "not available", "no information",
-                    "unable to", "i'm not sure"
+                ans_lower    = llm_answer.lower()
+                has_numbers  = bool(_re.search(r'\d+\.?\d*', llm_answer))
+                has_inc_id   = bool(_re.search(r'INC-\d+', llm_answer))
+                has_zones    = any(z in llm_answer for z in ["Zone_A","Zone_B","Zone_C","Zone_D"])
+                is_too_short = len(llm_answer.strip()) < 40
+                is_hallucin  = any(p in ans_lower for p in [
+                    "i don't have","i cannot","not available","no information",
+                    "unable to","i'm not sure","i do not have access"
                 ])
+                missing_data = not has_numbers and len(fused_incidents) > 0
 
+                # Deduction rules — each deduction has a clear reason
                 if is_too_short:
-                    deepeval_issues.append("⚠️ Response too short")
-                    deepeval_score -= 0.3
-                if is_generic and not fused_incidents:
-                    deepeval_issues.append("⚠️ Generic response — no grounding data")
-                    deepeval_score -= 0.3
-                if not has_numbers and not has_zones and len(fused_incidents) > 0:
-                    deepeval_issues.append("⚠️ Missing specific values from retrieved incidents")
-                    deepeval_score -= 0.2
+                    faithfulness -= 0.40
+                    faith_issues.append("Response too short (<40 chars)")
+                if is_hallucin:
+                    faithfulness -= 0.35
+                    faith_issues.append("Generic/hallucinated — not grounded in retrieved data")
+                if missing_data:
+                    faithfulness -= 0.15
+                    faith_issues.append("No specific numbers cited from retrieved incidents")
+                if fused_incidents and not (has_inc_id or has_zones or has_numbers):
+                    faithfulness -= 0.10
+                    faith_issues.append("Retrieved incidents not referenced in answer")
 
-                deepeval_score = max(0.0, round(deepeval_score, 2))
-                deepeval_pass  = deepeval_score >= 0.5
+                faithfulness = max(0.0, round(min(1.0, faithfulness), 2))
 
-            eval_label = "✅ Passed" if deepeval_pass else "⚠️ Low quality — returning best available"
-            eval_text  = f"{eval_label} | Score: {deepeval_score:.0%} | " + (
-                ", ".join(deepeval_issues) if deepeval_issues else "Faithfulness OK, values cited, no hallucination detected"
+            # ══ SCORE 2: LLM-AS-JUDGE (1 – 5) ════════════════════════════════
+            # Question: "Is the answer relevant, specific, complete, and useful?"
+            # Independent from faithfulness — judges different criteria.
+            judge_score  = 5
+            judge_issues = []
+
+            if llm_answer:
+                ans_lower = llm_answer.lower()
+                q_lower   = sanitised_query.lower()
+
+                # Criterion 1 — Relevance: does answer address the actual question?
+                question_words = set(q_lower.split()) - {"the","a","an","is","are","was","what","how","why","give","show","list","me","in","of","with","for","to","and","i","my"}
+                answer_words   = set(ans_lower.split())
+                overlap        = len(question_words & answer_words) / max(len(question_words), 1)
+                if overlap < 0.2:
+                    judge_score -= 1
+                    judge_issues.append("Low relevance — answer may not address the question")
+
+                # Criterion 2 — Specificity: cites real IDs, zones, numbers
+                is_specific = has_numbers or has_inc_id or has_zones
+                if not is_specific:
+                    judge_score -= 1
+                    judge_issues.append("Lacks specificity — no incident IDs, zones, or numbers")
+
+                # Criterion 3 — Completeness: answer is substantial
+                word_count = len(llm_answer.split())
+                if word_count < 20:
+                    judge_score -= 1
+                    judge_issues.append("Too brief — answer needs more detail")
+
+                # Criterion 4 — No disclaimer overload
+                disclaimer_count = sum(1 for p in ["note:","disclaimer:","please note","keep in mind","it is important"] if p in ans_lower)
+                if disclaimer_count >= 2:
+                    judge_score -= 1
+                    judge_issues.append("Too many disclaimers — reduces answer clarity")
+
+                judge_score = max(1, min(5, judge_score))
+
+            judge_pass   = judge_score >= 3
+            faith_pass   = faithfulness >= 0.5
+            deepeval_pass= faith_pass and judge_pass
+            deepeval_score = faithfulness   # used for cache threshold
+
+            eval_label = "✅ Passed" if deepeval_pass else "⚠️ Low quality"
+            eval_text  = (
+                f"Faithfulness: {faithfulness:.0%} {'✅' if faith_pass else '❌'} | "
+                f"LLM Judge: {judge_score}/5 {'✅' if judge_pass else '❌'} | "
+                + (", ".join(faith_issues + judge_issues) if faith_issues or judge_issues
+                   else "All checks passed")
             )
 
             yield _sse_event({
@@ -1348,13 +1401,13 @@ DS2 (household_power_consumption.csv) columns:
                 "answer":      final_answer,
                 "request_id":  request_id,
                 "deepeval": {
-                    "faithfulness_score":   round(deepeval_score, 2),
-                    "faithfulness_pass":    deepeval_pass,
-                    "llm_judge_score":      round(deepeval_score * 5, 1),   # scale 0-1 → 0-5
-                    "llm_judge_pass":       deepeval_score >= 0.6,
-                    "output_safety_pass":   len(output_issues) == 0,
+                    "faithfulness_score": round(faithfulness, 2),
+                    "faithfulness_pass":  faith_pass,
+                    "llm_judge_score":    judge_score,
+                    "llm_judge_pass":     judge_pass,
+                    "output_safety_pass": len(output_issues) == 0,
                     "output_safety_issues": output_issues,
-                    "issues":               deepeval_issues,
+                    "issues": faith_issues + judge_issues,
                 },
             }, event="answer")
 
