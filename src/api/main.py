@@ -722,13 +722,64 @@ async def rag_stream_endpoint(request: ChatRequest):
                 "status": "done",
             }, event="step")
 
+            # ── Direct ID lookup — if user asks about a specific INC-XXXX ─────
+            # Bypasses semantic search entirely for exact incident ID queries
+            direct_inc_match = _re.findall(r'\bINC-\d+\b', request.query, _re.I)
+            direct_incidents = []
+            if direct_inc_match:
+                yield _sse_event({
+                    "step": "bm25_search",
+                    "label": "🔍 Direct Incident ID Lookup",
+                    "text": f"Searching CSV for {direct_inc_match} — checking all 200 records...",
+                    "status": "running",
+                }, event="step")
+                try:
+                    if INCIDENTS_CSV.exists():
+                        inc_df = pd.read_csv(INCIDENTS_CSV)
+                        for inc_id in direct_inc_match:
+                            # Case-insensitive match on incident_id column
+                            match = inc_df[inc_df["incident_id"].str.upper() == inc_id.upper()]
+                            if not match.empty:
+                                row = match.iloc[0]
+                                direct_incidents.append({
+                                    "id": row["incident_id"],
+                                    "document": str(row.get("description", "")),
+                                    "metadata": {
+                                        "region":         str(row.get("region", "")),
+                                        "severity":       str(row.get("severity", "")),
+                                        "equipment_type": str(row.get("equipment_type", "")),
+                                        "outage_event":   str(row.get("outage_event", "")),
+                                        "timestamp":      str(row.get("timestamp", "")),
+                                        "voltage":        str(row.get("voltage", "")),
+                                        "grid_frequency": str(row.get("grid_frequency", "")),
+                                        "transformer_status": str(row.get("transformer_status", "")),
+                                    },
+                                    "score": 1.0,
+                                })
+                        found = [d["id"] for d in direct_incidents]
+                        not_found = [i for i in direct_inc_match if i.upper() not in [f.upper() for f in found]]
+                        status_txt = f"✅ Found: {found}" if found else f"❌ {direct_inc_match} not found in 200 incidents"
+                        if not_found:
+                            status_txt += f" | ❌ Not found: {not_found}"
+                        yield _sse_event({
+                            "step": "bm25_search",
+                            "label": "🔍 Direct ID Lookup Complete",
+                            "text": status_txt,
+                            "status": "done",
+                            "count": len(direct_incidents),
+                        }, event="step")
+                        logger.info(f"[{request_id}] Direct ID lookup: found={found}, missing={not_found}")
+                except Exception as e:
+                    logger.warning(f"[{request_id}] Direct lookup failed: {e}")
+
             # ── Step 4: BM25 keyword search ───────────────────────────────────
-            yield _sse_event({
-                "step": "bm25_search",
-                "label": "🔍 BM25 Keyword Search",
-                "text": f"Scanning {kb_size} incident descriptions for keyword matches...",
-                "status": "running",
-            }, event="step")
+            if not direct_inc_match:
+                yield _sse_event({
+                    "step": "bm25_search",
+                    "label": "🔍 BM25 Keyword Search",
+                    "text": f"Scanning {kb_size} incident descriptions for keyword matches...",
+                    "status": "running",
+                }, event="step")
 
             bm25_hits = []
             try:
@@ -801,7 +852,16 @@ async def rag_stream_endpoint(request: ChatRequest):
                         "score":    b.get("score", 0.5),
                     })
 
-            final_k = min(8, len(fused_incidents))
+            # Merge direct ID lookup results — these always take priority
+            if direct_incidents:
+                seen = {d["id"].upper() for d in direct_incidents}
+                # Add semantic results that aren't already in direct results
+                for f in fused_incidents:
+                    if f.get("id","").upper() not in seen:
+                        direct_incidents.append(f)
+                fused_incidents = direct_incidents
+
+            final_k = min(10, len(fused_incidents))
             fused_incidents = fused_incidents[:final_k]
 
             yield _sse_event({
