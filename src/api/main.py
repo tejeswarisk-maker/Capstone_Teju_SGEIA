@@ -533,15 +533,37 @@ async def rag_stream_endpoint(request: ChatRequest):
                     "text":   f"❌ Query rejected at {blocked_by}",
                     "status": "done",
                 }, event="step")
-                # Build answer that shows BOTH guardrail result + rejection message
+                # Simple, clean blocked message — just label + reason
+                label_map = {
+                    "Layer 1 — Format Check":          "Format Check Failed",
+                    "Layer 2 — Harmful Content Detection": "Harmful Content Detected",
+                    "Layer 3 — Domain Relevance Check":"Domain Relevance Check Failed",
+                }
+                # Extract clean label (strip unsafe keyword detail for display)
+                base_blocked = blocked_by.split("|")[0].strip()
+                clean_label  = label_map.get(base_blocked, "Input Guardrail Blocked")
+
+                # If harmful, append the unsafe keyword
+                keyword_note = ""
+                if "Unsafe keyword:" in blocked_by:
+                    kw = blocked_by.split("Unsafe keyword:")[-1].strip()
+                    keyword_note = f"\n**Unsafe keyword detected:** {kw}"
+
+                scope_note = (
+                    "\n\nThis query is outside SGEIA's scope. "
+                    "SGEIA only handles questions about:\n"
+                    "• Grid stability and health scores\n"
+                    "• Incidents, outages, and zone analysis\n"
+                    "• Smart meter consumption and anomalies\n"
+                    "• Voltage, frequency, transformer health\n"
+                    "• DS1 / DS2 dataset queries\n\n"
+                    "Please rephrase your question in the context of smart grid operations."
+                )
+
                 guardrail_answer = (
-                    f"**🛡️ Input Guardrail Result**\n\n"
-                    f"| Layer | Status |\n"
-                    f"|---|---|\n"
-                    f"| Layer 1 — Format Check | ✅ Passed |\n"
-                    f"| {blocked_by} | ❌ **Blocked** |\n\n"
-                    f"---\n\n"
+                    f"**🛡️ {clean_label}**{keyword_note}\n\n"
                     f"{validation.rejection_reason}"
+                    f"{scope_note if 'Domain' not in clean_label else ''}"
                 )
                 yield _sse_event({"answer": guardrail_answer, "request_id": request_id}, event="answer")
                 return
