@@ -1645,61 +1645,6 @@ function _widgetMetrics(type){
 
 function sendQuick(q){$('chat-inp').value=q;sendMsg();}
 
-// ── Global tooltip ────────────────────────────────────────────────────────
-(function(){
-  const tip = document.createElement('div');
-  tip.id = 'gtooltip';
-  document.body.appendChild(tip);
-
-  const TIPS = {
-    'agents-badge-el':
-`5 LangGraph Agents Running:
-
-① LLM Query Router
-   Reads your question, decides which agents to use
-
-② Grid Retrieval Agent
-   Searches 200 incidents using BM25 + ChromaDB
-
-③ Grid Stability Agent
-   XGBoost classifier on DS1 telemetry (60K rows)
-
-④ Smart Meter Agent
-   Isolation Forest on DS2 smart meter data (2M rows)
-
-⑤ Failure Analysis + Recommendation Agent
-   Synthesises all results, validates answer via DeepEval`,
-
-    'api-status-el':
-`Backend Health Status
-
-🟢 Green = All services reachable:
-   • FastAPI backend running on port 8000
-   • ChromaDB vector store connected
-   • XGBoost stability model loaded
-   • DS1 + DS2 datasets available on disk
-
-🔴 Red = One or more services offline
-   Restart: uvicorn src.api.main:app --port 8000`,
-  };
-
-  Object.keys(TIPS).forEach(id => {
-    const el = document.getElementById(id);
-    if(!el) return;
-    el.addEventListener('mouseenter', e => {
-      tip.textContent = TIPS[id];
-      tip.style.display = 'block';
-      const r = el.getBoundingClientRect();
-      tip.style.top  = (r.bottom + 8) + 'px';
-      tip.style.left = Math.max(4, r.right - 320) + 'px';
-    });
-    el.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
-    el.addEventListener('mousemove', e => {
-      tip.style.top  = (e.clientY + 16) + 'px';
-      tip.style.left = Math.max(4, e.clientX - 160) + 'px';
-    });
-  });
-})();
 $('chat-inp').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();}});
 $('chat-inp').addEventListener('input',function(){
   this.style.height='auto';this.style.height=Math.min(this.scrollHeight,100)+'px';
@@ -1719,6 +1664,54 @@ $('chat-inp').addEventListener('input',function(){
 
   setInterval(()=>{checkHealth();loadMetrics();},30000);
   setInterval(renderAgentFeed,8000);
+
+  // ── Tooltips — wired AFTER DOM is fully ready ──────────────────────────
+  const _tip = document.createElement('div');
+  _tip.id = 'gtooltip';
+  document.body.appendChild(_tip);
+
+  const _TIPS = {
+    'agents-badge-el':
+`5 LangGraph Agents Running:
+
+① LLM Query Router
+   Reads your question, decides which agents to use
+
+② Grid Retrieval Agent
+   Searches 200 incidents (BM25 + ChromaDB)
+
+③ Grid Stability Agent
+   XGBoost on DS1 telemetry (60,000 rows)
+
+④ Smart Meter Agent
+   Isolation Forest on DS2 data (2M rows)
+
+⑤ Failure Analysis + Recommendation Agent
+   Synthesises results, validates via DeepEval`,
+
+    'api-status-el':
+`Backend Health Status
+
+🟢 Green = All services reachable:
+   FastAPI running · ChromaDB connected
+   XGBoost loaded · DS1 + DS2 available
+
+🔴 Red = One or more services offline
+   Restart backend to reconnect`,
+  };
+
+  Object.entries(_TIPS).forEach(([id, text]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('mouseenter', ev => {
+      _tip.textContent = text;
+      _tip.style.display = 'block';
+      const r = el.getBoundingClientRect();
+      _tip.style.top  = (r.bottom + window.scrollY + 8) + 'px';
+      _tip.style.left = Math.max(8, r.right - 300) + 'px';
+    });
+    el.addEventListener('mouseleave', () => _tip.style.display = 'none');
+  });
 })();
 </script>
 </body>
