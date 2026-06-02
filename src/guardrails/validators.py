@@ -109,13 +109,9 @@ def _check_harmful(query: str) -> Optional[tuple]:
             is_self_harm = any(w in unsafe_word.lower() for w in self_harm_words)
             if is_self_harm:
                 reason = (
-                    "💛 It sounds like you may be going through a difficult time. "
-                    "SGEIA is a power grid intelligence tool and cannot help with personal situations.\n\n"
-                    "If you are in distress, please reach out:\n"
-                    "• **iCall (India):** 9152987821\n"
-                    "• **Vandrevala Foundation:** 1860-2662-345 (24x7)\n"
-                    "• **AASRA:** 9820466627\n\n"
-                    "You are not alone. Please talk to someone you trust. 💙"
+                    "⚠️ This query contains content that cannot be processed by SGEIA.\n\n"
+                    "SGEIA is a Smart Grid Energy Intelligence Assistant and only handles "
+                    "questions about power grid operations, stability, incidents, and energy systems."
                 )
             else:
                 reason = (
