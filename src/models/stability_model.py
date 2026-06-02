@@ -139,26 +139,22 @@ class StabilityModel:
         mae = mean_absolute_error(y_reg_te, self.regressor.predict(X_te))
         logger.info(f"Regressor MAE: {mae:.6f}")
 
-        # ── SHAP explainer ────────────────────────────────────────────────────
-        import shap
-        # Fix: XGBoost ≥1.7 saves base_score as '[6.38E-1]' (with brackets).
-        # SHAP's TreeExplainer can't parse this string — patch it to a plain float.
+        # ── SHAP explainer (optional — gracefully skipped if not installed) ──
         try:
+            import shap, json, re
             cfg = self.classifier.get_booster().save_config()
-            import json, re
             cfg_dict = json.loads(cfg)
-            bs_raw = (cfg_dict.get("learner", {})
-                              .get("learner_model_param", {})
-                              .get("base_score", "0.5"))
-            # Strip brackets e.g. '[6.38E-1]' → '6.38E-1'
+            bs_raw   = (cfg_dict.get("learner", {})
+                                .get("learner_model_param", {})
+                                .get("base_score", "0.5"))
             bs_clean = re.sub(r"[\[\]]", "", str(bs_raw))
             self.classifier.get_booster().set_param("base_score", float(bs_clean))
-        except Exception:
-            pass  # if patching fails, SHAP will try on its own
-        try:
             self._shap_explainer_cls = shap.TreeExplainer(self.classifier)
+        except ImportError:
+            logger.info("SHAP not installed — SHAP feature importance disabled.")
+            self._shap_explainer_cls = None
         except Exception as shap_err:
-            logger.warning(f"SHAP TreeExplainer init failed ({shap_err}) — SHAP disabled.")
+            logger.warning(f"SHAP init failed ({shap_err}) — SHAP disabled.")
             self._shap_explainer_cls = None
 
         # ── Save to disk ──────────────────────────────────────────────────────
@@ -179,19 +175,18 @@ class StabilityModel:
         self.regressor  = joblib.load(STABILITY_REGRESSOR_PATH)
         self.scaler     = joblib.load(SCALER_DS1_PATH)
 
-        import shap, json, re
-        # Patch base_score bracket issue before SHAP reads it
         try:
+            import shap, json, re
             cfg_dict = json.loads(self.classifier.get_booster().save_config())
             bs_raw   = (cfg_dict.get("learner", {})
                                 .get("learner_model_param", {})
                                 .get("base_score", "0.5"))
             bs_clean = re.sub(r"[\[\]]", "", str(bs_raw))
             self.classifier.get_booster().set_param("base_score", float(bs_clean))
-        except Exception:
-            pass
-        try:
             self._shap_explainer_cls = shap.TreeExplainer(self.classifier)
+        except ImportError:
+            logger.info("SHAP not installed — SHAP disabled.")
+            self._shap_explainer_cls = None
         except Exception as shap_err:
             logger.warning(f"SHAP load failed ({shap_err}) — SHAP disabled.")
             self._shap_explainer_cls = None
