@@ -306,13 +306,13 @@ button{cursor:pointer;font-family:inherit}
   </div>
   <div class="hdr-gap"></div>
   <div class="hdr-right">
-    <div class="live-badge">Live telemetry</div>
+    <div class="live-badge" title="Dashboard data refreshes every 30 seconds from live telemetry">Live telemetry</div>
     <div style="font-size:12px;color:var(--text2)" id="last-updated-lbl">Refreshing…</div>
-    <div class="agents-badge">
+    <div class="agents-badge" title="5 LangGraph agents running:&#10;① LLM Query Router — classifies your question&#10;② Grid Retrieval Agent — searches 200 incidents (BM25+ChromaDB)&#10;③ Grid Stability Agent — XGBoost on DS1 telemetry&#10;④ Smart Meter Agent — Isolation Forest on DS2 data&#10;⑤ Failure Analysis + Recommendation Agent — generates validated answers" style="cursor:help">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
       <span id="agents-txt">5 agents online</span>
     </div>
-    <div style="display:flex;align-items:center;gap:5px">
+    <div style="display:flex;align-items:center;gap:5px" title="FastAPI backend health check — green means all services (ChromaDB, XGBoost, datasets) are reachable">
       <div class="api-dot" id="api-dot"></div>
       <span class="api-lbl" id="api-lbl">Connecting…</span>
     </div>

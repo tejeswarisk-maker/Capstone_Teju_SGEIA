@@ -75,14 +75,18 @@ def _check_format(query: str) -> Optional[str]:
 
 # ── Harmful / violent content patterns ────────────────────────────────────────
 HARMFUL_PATTERNS = [
-    # Violence / threats
+    # Violence / threats to others
     r'\b(kill|murder|stab|shoot|bomb|attack|harm|hurt|threaten|assassin|terror)\b',
-    # Self-harm
-    r'\b(suicide|self.?harm|cut myself|end my life)\b',
-    # Weapons
-    r'\b(knife|gun|weapon|explosive|grenade|poison)\b.*\b(person|people|human|someone|him|her)\b',
-    # Illegal
-    r'\b(hack|ddos|malware|ransomware|phish|steal data|illegal)\b',
+    # Self-harm and suicidal intent (ANY mention — no context required)
+    r'\b(suicide|suicidal|self.?harm|cut myself|end my life|want to die|wanna die|'
+    r'die with|dying with|kill myself|i want (to )?die|i wanna die|'
+    r'poison (myself|me)|take my (own )?life|hurt myself)\b',
+    # Weapons used against people
+    r'\b(knife|gun|weapon|explosive|grenade)\b.*\b(person|people|human|someone|him|her|me|myself)\b',
+    # Poison — standalone (dangerous regardless of context)
+    r'\b(poison|cyanide|arsenic|overdose|lethal dose)\b',
+    # Illegal cyber activity
+    r'\b(hack|ddos|malware|ransomware|phish|steal data)\b',
     # Sexual / inappropriate
     r'\b(sex|porn|naked|nude|rape|molest)\b',
 ]
@@ -98,11 +102,27 @@ def _check_harmful(query: str) -> Optional[tuple]:
         m = _re.search(pattern, lower)
         if m:
             unsafe_word = m.group(0).strip()
-            reason = (
-                f"⚠️ This query contains content that cannot be processed by SGEIA.\n\n"
-                f"SGEIA is a Smart Grid Energy Intelligence Assistant and only handles "
-                f"questions about power grid operations, stability, incidents, and energy systems."
-            )
+            # Use empathetic message for self-harm patterns
+            self_harm_words = {"die","dying","suicide","suicidal","self-harm","kill myself",
+                               "want to die","wanna die","hurt myself","poison","end my life",
+                               "take my life","overdose","cut myself"}
+            is_self_harm = any(w in unsafe_word.lower() for w in self_harm_words)
+            if is_self_harm:
+                reason = (
+                    "💛 It sounds like you may be going through a difficult time. "
+                    "SGEIA is a power grid intelligence tool and cannot help with personal situations.\n\n"
+                    "If you are in distress, please reach out:\n"
+                    "• **iCall (India):** 9152987821\n"
+                    "• **Vandrevala Foundation:** 1860-2662-345 (24x7)\n"
+                    "• **AASRA:** 9820466627\n\n"
+                    "You are not alone. Please talk to someone you trust. 💙"
+                )
+            else:
+                reason = (
+                    f"⚠️ This query contains content that cannot be processed by SGEIA.\n\n"
+                    f"SGEIA is a Smart Grid Energy Intelligence Assistant and only handles "
+                    f"questions about power grid operations, stability, incidents, and energy systems."
+                )
             return reason, unsafe_word
     return None
 
