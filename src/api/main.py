@@ -525,14 +525,25 @@ async def rag_stream_endpoint(request: ChatRequest):
             validation = validate_and_sanitise(request.query)
 
             if not validation.is_valid:
-                # Hard block — harmful content or out-of-scope
+                blocked_by = validation.blocked_by or "Input Guardrails"
+                # Show the guardrail step
                 yield _sse_event({
-                    "step": "input_guard",
-                    "label": "🛡️ Input Guardrails — Blocked",
-                    "text": f"❌ Query rejected: {validation.rejection_reason[:80]}",
+                    "step":   "input_guard",
+                    "label":  f"🛡️ Blocked by {blocked_by}",
+                    "text":   f"❌ Query rejected at {blocked_by}",
                     "status": "done",
                 }, event="step")
-                yield _sse_event({"answer": validation.rejection_reason, "request_id": request_id}, event="answer")
+                # Build answer that shows BOTH guardrail result + rejection message
+                guardrail_answer = (
+                    f"**🛡️ Input Guardrail Result**\n\n"
+                    f"| Layer | Status |\n"
+                    f"|---|---|\n"
+                    f"| Layer 1 — Format Check | ✅ Passed |\n"
+                    f"| {blocked_by} | ❌ **Blocked** |\n\n"
+                    f"---\n\n"
+                    f"{validation.rejection_reason}"
+                )
+                yield _sse_event({"answer": guardrail_answer, "request_id": request_id}, event="answer")
                 return
 
             sanitised_query = validation.sanitised_query

@@ -54,6 +54,7 @@ class ValidationResult:
     is_valid:         bool
     sanitised_query:  str = ""
     rejection_reason: Optional[str] = None
+    blocked_by:       Optional[str] = None   # which layer blocked: format/harmful/domain
     pii_detected:     bool = False
     pii_entities:     list = field(default_factory=list)
 
@@ -167,13 +168,13 @@ def validate_and_sanitise(raw_query: str) -> ValidationResult:
     format_error = _check_format(raw_query)
     if format_error:
         logger.warning(f"Query rejected (format): {format_error}")
-        return ValidationResult(is_valid=False, rejection_reason=format_error)
+        return ValidationResult(is_valid=False, rejection_reason=format_error, blocked_by="Layer 1 — Format Check")
 
-    # ── Layer 2: Harmful content (checked FIRST — highest priority) ───────────
+    # ── Layer 2: Harmful content ───────────────────────────────────────────────
     harmful_reason = _check_harmful(raw_query)
     if harmful_reason:
         logger.warning(f"Query rejected (harmful): '{raw_query[:60]}'")
-        return ValidationResult(is_valid=False, rejection_reason=harmful_reason)
+        return ValidationResult(is_valid=False, rejection_reason=harmful_reason, blocked_by="Layer 2 — Harmful Content Detection")
 
     # ── Layer 3: Domain relevance ─────────────────────────────────────────────
     if not _check_domain_relevance(raw_query):
@@ -188,7 +189,7 @@ def validate_and_sanitise(raw_query: str) -> ValidationResult:
             "Please rephrase your question in the context of smart grid operations."
         )
         logger.warning(f"Query rejected (out-of-domain): '{raw_query[:60]}'")
-        return ValidationResult(is_valid=False, rejection_reason=reason)
+        return ValidationResult(is_valid=False, rejection_reason=reason, blocked_by="Layer 3 — Domain Relevance Check")
 
     # ── Layer 4: PII masking ──────────────────────────────────────────────────
     sanitised, pii_detected, pii_entities = _mask_pii_presidio(raw_query)
