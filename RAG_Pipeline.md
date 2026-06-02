@@ -47,6 +47,10 @@ flowchart TD
         RRF["⚗️ RRF FUSION\nCombines BM25 + Semantic\nPicks Top 8 incidents\n+15% better recall"]
         LLM["🤖 LLM — Groq llama\nReads: question + 8 incidents\n+ XGBoost stats + DS2 stats\nWrites grounded answer"]
         DEVAL["🔬 DEEPEVAL QUALITY\n① Faithfulness 0-100%\n② LLM Judge 1-5 · need 3+\n③ Output Safety Pass/Fail\nFail → retry once"]
+        OGUARD["🔒 OUTPUT GUARDRAILS
+Jailbreak scan
+PII re-scan on output
+Length check"]
         ANS["✅ ANSWER\nMarkdown formatted\nDeepEval scores in grey\n👍 👎 feedback buttons"]
         USER --> GUARD
         GUARD -- "PASS" --> CACHE
@@ -58,9 +62,11 @@ flowchart TD
         SEMS --> RRF
         MLS --> LLM
         RRF --> LLM
-        LLM --> DEVAL
-        DEVAL -- "PASS" --> ANS
+        LLM --> RECOM
+        RECOM --> DEVAL
+        DEVAL -- "PASS" --> OGUARD
         DEVAL -- "FAIL retry" --> LLM
+        OGUARD --> ANS
     end
 
     OFFLINE --> USER
@@ -83,7 +89,9 @@ flowchart TD
     style MLS    fill:#0F766E,color:#fff
     style RRF    fill:#7C3AED,color:#fff
     style LLM    fill:#B45309,color:#fff
+    style RECOM  fill:#065A82,color:#fff
     style DEVAL  fill:#7C3AED,color:#fff
+    style OGUARD fill:#EF4444,color:#fff
     style ANS    fill:#22C55E,color:#fff
 ```
 
@@ -106,7 +114,9 @@ flowchart TD
 | 11 | ML Analysis | XGBoost gives health score, Isolation Forest flags anomalies |
 | 12 | RRF Fusion | Combine BM25 + Semantic and pick best 8 incidents |
 | 13 | LLM | Read all context and write grounded answer in plain English |
+| 13b | Recommendation | Generate root cause, mitigation steps, and resolution for the question |
 | 14 | DeepEval | Check faithfulness, judge quality, scan output safety |
+| 14b | Output Guardrails | Scan output for jailbreak, PII leakage, and harmful content |
 | 15 | Answer | Show result with DeepEval scores and feedback buttons |
 
 ---

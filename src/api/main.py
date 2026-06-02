@@ -338,13 +338,15 @@ Rules:
 - ALWAYS use real incident IDs, zones, severity, equipment, and descriptions from the INCIDENTS section
 - ALWAYS cite actual numbers from LIVE WIDGET METRICS and STABILITY sections
 - For listing incidents: format each one clearly with ID, zone, severity, type, and description
-- For analysis questions: reason through root causes using the data — don't just restate numbers
-- For action questions: give a concrete prioritised plan referencing specific incidents or zones
-- For comparison questions: compare zones/severities/types using the actual retrieved data
-- If the user's question is not fully answerable from the data, say what you do know and what additional data would be needed
-- Format responses with **bold headers** and bullet points for clarity
-- Aim for 200-400 words — thorough but concise
-- If data is missing for a specific metric, say so clearly rather than guessing"""
+- Structure EVERY analysis answer in 3 parts:
+  **Analysis** — what is happening and why (cite real numbers, incident IDs, zone names)
+  **Recommendations** — 3-5 specific actionable steps with priority order (Immediate → Short-term → Monitor)
+  **Resolution** — what metrics to watch to confirm the issue is fixed and target values to reach
+- For data/list queries: just return the data, skip recommendations
+- For comparison questions: compare using actual retrieved data then add recommendations
+- Always ground recommendations in the actual evidence found (e.g. "Fix Zone D first — 52 incidents")
+- Format with **bold headers** and bullet points
+- Max 250 words. Be specific and actionable."""
 
     async def _call_direct() -> str:
         """Direct httpx call to Prodapt gateway — fastest path."""
@@ -1147,15 +1149,24 @@ DS2 (household_power_consumption.csv) columns:
   sub_metering_kitchen, sub_metering_laundry, sub_metering_hvac = watts
 
 === ANSWERING RULES ===
-- Answer ONLY from the data provided in the sections above — do not invent or assume values
-- For "why" questions: find the specific values in DS1/DS2/incidents that PROVE the claim, cite them directly
-  Example: "DS1 shows tau1 mean=5.25 (high reaction time) → slow response → instability confirmed"
-  Example: "DS2 shows voltage range 226V-251V (±11% deviation from 240V nominal) → voltage instability confirmed"
-  Example: "Incidents show 20,958 voltage_deviation events → distributed across all 4 zones"
-- For data queries: clean numbered list or table, no narrative
-- For analysis: cite specific numbers, explain the mechanism, max 5 bullet points
-- DO NOT add "Next Steps", "Recommendations", "Predictive Modeling" sections unless asked
-- Max 150 words. Be direct and specific."""
+- Answer ONLY from the data provided above — cite real numbers, incident IDs, zone names
+- Structure EVERY answer in exactly 3 parts:
+
+  **PART 1 — ANALYSIS** (what is happening and why, with data proof)
+  - Cite specific values from DS1/DS2/incidents
+  - Explain the causal chain (e.g. high tau1 → slow response → instability)
+
+  **PART 2 — RECOMMENDATIONS** (what to do about it — always include this)
+  - Give 3-5 specific actionable steps referencing the actual zones/incidents found
+  - Use priority order: Immediate → Short-term → Monitor
+  - Ground each step in the evidence (e.g. "Fix Zone D first — it has 52 incidents")
+
+  **PART 3 — RESOLUTION** (how to confirm the issue is resolved)
+  - What metrics to watch after taking action
+  - Target values to reach (e.g. health score > 70, frequency within 49.8-50.2 Hz)
+
+- For data/list queries (list, show, give): skip Part 2 and 3, just return the data
+- Max 250 words total. Be specific and actionable."""
 
             # ── Call LLM — Groq first (confirmed working), Prodapt fallback ──────
             import os as _os
