@@ -58,7 +58,7 @@ logger = get_logger(__name__)
 # ── Config ─────────────────────────────────────────────────────────────────────
 LIVE_TELEMETRY_PATH = DS1_AUGMENTED.parent / "live_telemetry.csv"
 MAX_ROWS            = 500
-INTERVAL_SECONDS    = 30
+INTERVAL_SECONDS    = 60   # generate new telemetry every 1 minute
 
 # ── DS1 distributions (computed from all 60 000 rows) ─────────────────────────
 _NUMERIC_DIST = {

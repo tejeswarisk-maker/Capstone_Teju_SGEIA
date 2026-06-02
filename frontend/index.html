@@ -315,11 +315,15 @@ button{cursor:pointer;font-family:inherit}
   <div class="hdr-right">
     <div class="live-badge" title="Dashboard data refreshes every 30 seconds from live telemetry">Live telemetry</div>
     <div style="font-size:12px;color:var(--text2)" id="last-updated-lbl">Refreshing…</div>
-    <div class="agents-badge" id="agents-badge-el" style="cursor:help">
+    <div class="agents-badge" style="cursor:help;position:relative"
+      onmouseenter="showTip(event,'5 LangGraph Agents:\n① LLM Query Router — classifies your question\n② Grid Retrieval Agent — BM25 + ChromaDB search\n③ Grid Stability Agent — XGBoost on DS1\n④ Smart Meter Agent — Isolation Forest on DS2\n⑤ Failure Analysis + Recommendation Agent')"
+      onmouseleave="hideTip()">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
       <span id="agents-txt">5 agents online</span>
     </div>
-    <div style="display:flex;align-items:center;gap:5px;cursor:help" id="api-status-el">
+    <div style="display:flex;align-items:center;gap:5px;cursor:help"
+      onmouseenter="showTip(event,'Backend Health:\n🟢 Green = FastAPI + ChromaDB + XGBoost + Datasets all OK\n🔴 Red = One or more services offline\nRestart: uvicorn src.api.main:app --port 8000')"
+      onmouseleave="hideTip()">
       <div class="api-dot" id="api-dot"></div>
       <span class="api-lbl" id="api-lbl">Connecting…</span>
     </div>
@@ -566,6 +570,30 @@ button{cursor:pointer;font-family:inherit}
 const API = 'http://127.0.0.1:8000';
 let dash = {}, curWidget = null, threads = {}, charts = {};
 
+// ── Tooltip functions ──────────────────────────────────────────────────────
+let _tipEl = null;
+function _ensureTip(){
+  if(!_tipEl){
+    _tipEl = document.createElement('div');
+    _tipEl.style.cssText = 'position:fixed;z-index:999999;background:#1a202c;color:#e2e8f0;'+
+      'font-size:11px;line-height:1.8;padding:10px 14px;border-radius:8px;white-space:pre;'+
+      'pointer-events:none;display:none;box-shadow:0 4px 20px rgba(0,0,0,.5);max-width:340px;';
+    document.body.appendChild(_tipEl);
+  }
+  return _tipEl;
+}
+function showTip(e, text){
+  const t = _ensureTip();
+  t.textContent = text;
+  t.style.display = 'block';
+  t.style.top  = (e.clientY + 16) + 'px';
+  t.style.left = Math.max(8, e.clientX - 170) + 'px';
+}
+function hideTip(){
+  const t = _ensureTip();
+  t.style.display = 'none';
+}
+
 // ── Theme ──────────────────────────────────────────────────────────────────
 function setTheme(t){
   document.documentElement.setAttribute('data-theme',t);
@@ -618,7 +646,7 @@ async function loadMetrics(){
     dashLoaded=true;
     _refreshCountdown=30;
     const t=new Date();
-    if(lbl) lbl.textContent=`Updated ${t.getHours().toString().padStart(2,'0')}:${t.getMinutes().toString().padStart(2,'0')}:${t.getSeconds().toString().padStart(2,'0')} · next in 30s`;
+    if(lbl) lbl.textContent=`Updated ${t.getHours().toString().padStart(2,'0')}:${t.getMinutes().toString().padStart(2,'0')}:${t.getSeconds().toString().padStart(2,'0')} · next in 60s`;
     renderAll();
     // Hide splash once data is ready
     const sp=document.getElementById('splash');
@@ -632,7 +660,7 @@ async function loadMetrics(){
 }
 
 // Countdown ticker — shows "Next refresh in Xs" between API calls
-let _refreshCountdown=30;
+let _refreshCountdown=60;
 setInterval(()=>{
   _refreshCountdown=Math.max(0,_refreshCountdown-1);
   const lbl=$('last-updated-lbl');
@@ -1662,7 +1690,7 @@ $('chat-inp').addEventListener('input',function(){
   await checkHealth();   setBar(40);
   await loadMetrics();   setBar(100); // loadMetrics hides splash when done
 
-  setInterval(()=>{checkHealth();loadMetrics();},30000);
+  setInterval(()=>{checkHealth();loadMetrics();},60000);
   setInterval(renderAgentFeed,8000);
 
   // ── Tooltips — wired AFTER DOM is fully ready ──────────────────────────
