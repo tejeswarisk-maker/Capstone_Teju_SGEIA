@@ -54,3 +54,4 @@ pydantic-settings>=2.3.0
 # ── Utilities ─────────────────────────────────────────────────────────────────
 python-dotenv>=1.0.1
 urllib3>=2.2.1
+colorlog>=6.8.2
