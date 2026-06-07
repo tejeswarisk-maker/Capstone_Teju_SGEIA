@@ -1,0 +1,52 @@
+services:
+  - type: web
+    name: sgeia-api
+    runtime: python
+    region: oregon
+
+    # ── Python version — MUST be 3.11; 3.14 breaks deepeval/xgboost ──────────
+    pythonVersion: "3.11.9"
+
+    # ── Build ─────────────────────────────────────────────────────────────────
+    buildCommand: bash build.sh
+
+    # ── Start ─────────────────────────────────────────────────────────────────
+    # $PORT is automatically set by Render (usually 10000)
+    startCommand: >
+      uvicorn src.api.main:app
+      --host 0.0.0.0
+      --port $PORT
+      --workers 1
+      --timeout-keep-alive 75
+
+    # ── Environment variables ─────────────────────────────────────────────────
+    # Set these in the Render dashboard → Environment section.
+    # Listed here as documentation; values must be supplied manually.
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false          # set manually in Render dashboard
+      - key: OPENAI_API_KEY
+        value: learner036    # Prodapt gateway key (non-secret)
+      - key: OPENAI_BASE_URL
+        value: https://keygateway.arshnivlabs.com/v1
+      - key: RENDER
+        value: "true"        # tells the app it is running on Render
+      - key: API_HOST
+        value: "0.0.0.0"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PYTHONDONTWRITEBYTECODE
+        value: "1"
+      # Disable LangSmith tracing (not needed on Render)
+      - key: LANGCHAIN_TRACING_V2
+        value: "false"
+
+    # ── Health check ──────────────────────────────────────────────────────────
+    healthCheckPath: /api/health
+
+    # ── Persistent disk (optional — needed to persist DS2 + chroma_db) ───────
+    # Uncomment if you upgrade to a paid Render plan:
+    # disk:
+    #   name: sgeia-data
+    #   mountPath: /data
+    #   sizeGB: 2

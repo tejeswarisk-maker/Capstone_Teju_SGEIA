@@ -50,8 +50,11 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # ── API settings ──────────────────────────────────────────────────────────
-    api_host: str = "127.0.0.1"
+    # On Render (and any container/cloud host), set API_HOST=0.0.0.0
+    api_host: str = "0.0.0.0"
     api_port: int = 8000
+    # Set RENDER=true in Render dashboard env vars
+    render: str = ""
 
     # ── RAG / retrieval settings ───────────────────────────────────────────────
     # Maximum incident chunks returned before reranking

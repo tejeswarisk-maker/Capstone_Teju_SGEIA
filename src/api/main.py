@@ -938,7 +938,8 @@ async def rag_stream_endpoint(request: ChatRequest):
                 stab_model = get_stability_model()
                 stab_model._ensure_loaded()
                 if DS1_AUGMENTED.exists():
-                    ds1_full   = pd.read_csv(DS1_AUGMENTED)
+                    # Cap at 10K rows to prevent OOM on Render free tier (full DS1=60K rows)
+                    ds1_full   = pd.read_csv(DS1_AUGMENTED, nrows=10_000)
                     # Run model on a live sample
                     row_s    = ds1_full.sample(1, random_state=int(time.time())%999).iloc[0]
                     feat_cols= ["tau1","tau2","tau3","tau4","p1","p2","p3","p4","g1","g2","g3","g4"]

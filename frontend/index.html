@@ -466,7 +466,7 @@ button{cursor:pointer;font-family:inherit}
   <!-- 10 · Smart Meter Anomaly Feed -->
   <div class="card">
     <div class="ch">
-      <div><div class="ct">Smart Meter Anomaly Feed</div><div class="cs">Isolation Forest + Autoencoder</div></div>
+      <div><div class="ct">Smart Meter Anomaly Feed</div><div class="cs">Isolation Forest</div></div>
       <button class="cbtn" onclick="openChat('anomaly','Smart Meter Anomaly Feed','Real-time anomaly detections from the Isolation Forest model trained on DS2 (smart meter consumption data). Each entry shows anomaly ID, zone, time, severity, and description of the consumption pattern anomaly.')">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
       </button>
@@ -858,7 +858,7 @@ function renderAnomalyFeed(){
   const items=[
     {id:'AN-2041',t:'14:32',z:'Zone_C',s:'high',    d:'Sudden 42% consumption drop on bank SM-C12'},
     {id:'AN-2040',t:'14:11',z:'Zone_B',s:'medium',  d:'Reverse-power flow detected, residential cluster'},
-    {id:'AN-2039',t:'13:48',z:'Zone_C',s:'critical',d:'Autoencoder reconstruction error 4.6σ'},
+    {id:'AN-2039',t:'13:48',z:'Zone_C',s:'critical',d:'Isolation Forest anomaly score: -0.42 (far below threshold) — critical outlier detected'},
     {id:'AN-2038',t:'13:22',z:'Zone_A',s:'low',     d:'Minor load imbalance on phase B'},
     {id:'AN-2037',t:'12:55',z:'Zone_D',s:'medium',  d:'Off-peak spike, commercial feeder'},
   ];
@@ -968,7 +968,7 @@ function buildDashboardSnapshot() {
     stability: { unstable_pct: ss.unstable_pct??18.3, stab_p25: ss.stab_score_p25??-0.02, stab_p75: ss.stab_score_p75??0.06 },
     outage_distribution: od,
     equipment_status: { transformer:{total:48,healthy:41,warn:5,crit:2}, substation:{total:12,healthy:11,warn:1,crit:0}, distribution_unit:{total:96,healthy:84,warn:9,crit:3}, smart_meter_bank:{total:320,healthy:308,warn:10,crit:2} },
-    recent_anomalies: ['AN-2041 Zone_C HIGH: Sudden 42% consumption drop on bank SM-C12','AN-2040 Zone_B MEDIUM: Reverse-power flow detected','AN-2039 Zone_C CRITICAL: Autoencoder reconstruction error 4.6σ'],
+    recent_anomalies: ['AN-2041 Zone_C HIGH: Sudden 42% consumption drop on bank SM-C12','AN-2040 Zone_B MEDIUM: Reverse-power flow detected','AN-2039 Zone_C CRITICAL: Isolation Forest score -0.42 — critical outlier'],
     recent_recommendations: ['INC-001423 CRITICAL 91%: Shed 12% non-critical load on Zone_C feeder F-7','INC-001417 HIGH 84%: Reconfigure transformer T-22 tap position to +2','INC-001411 MEDIUM 62%: Curtail PV injection from solar farm SF-D2 by 15%'],
     agents_online: 5,
   };
@@ -1688,7 +1688,7 @@ function _widgetMetrics(type){
     voltage:{nominal_band_v:'237–245V',stability_p25:ss.stab_score_p25,stability_p75:ss.stab_score_p75},
     demand:{capacity_threshold_pct:80,incident_counts:ic,high_demand_events:od.high_demand_event||0},
     equipment:{incident_counts:ic,outage_distribution:od},
-    anomaly:{anomaly_model:'IsolationForest+Autoencoder',region_distribution:rd,incident_counts:ic},
+    anomaly:{anomaly_model:'IsolationForest',region_distribution:rd,incident_counts:ic},
     agents:{agents:['GridRetrievalAgent','FailureAnalysisAgent','RecommendationAgent',
       'SmartMeterAgent','GridStabilityAgent'],incident_counts:ic},
     recommendations:{stability_summary:ss,incident_counts:ic,health_score:health},
